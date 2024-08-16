@@ -1,71 +1,27 @@
 import cv2
-import numpy as np
 import yaml
+import os
+import debugger
 
 
-def add_grid_lines(image, interval=50, color=(0, 255, 0), thickness=1):
-    """
-    Add grid lines to an image at specified intervals.
+def remap_rect_images(left, right, Kl, Dl, Rl, Pl, Kr, Dr, Rr, Pr):
+    # Compute the undistortion and rectification transformation map
+    map1x, map1y = cv2.initUndistortRectifyMap(Kl, Dl, Rl, Pl, (left.shape[1], left.shape[0]),
+                                               cv2.CV_32FC1)
+    map2x, map2y = cv2.initUndistortRectifyMap(Kr, Dr, Rr, Pr, (right.shape[1], right.shape[0]),
+                                               cv2.CV_32FC1)
 
-    :param image: Input image (numpy array).
-    :param interval: Interval between lines in pixels.
-    :param color: Color of the lines in BGR format (default is green).
-    :param thickness: Thickness of the lines.
-    :return: Image with grid lines added.
-    """
-    # Make a copy of the image to avoid modifying the original
-    img_with_lines = image.copy()
-
-    height, width = img_with_lines.shape[:2]
-
-    # Draw horizontal lines
-    for y in range(0, height, interval):
-        cv2.line(img_with_lines, (0, y), (width, y), color, thickness)
-
-    # # Draw vertical lines
-    # for x in range(0, width, interval):
-    #     cv2.line(img_with_lines, (x, 0), (x, height), color, thickness)
-
-    return img_with_lines
+    # Apply the rectification maps to the images
+    rectified_left = cv2.remap(left, map1x, map1y, cv2.INTER_LINEAR)
+    rectified_right = cv2.remap(right, map2x, map2y, cv2.INTER_LINEAR)
+    return rectified_left, rectified_right
 
 
-def draw_keypoints(left, right):
-    # Initiate SIFT detector
-    sift = cv2.SIFT_create()
-
-    # find the keypoints and descriptors with SIFT
-    kp1, des1 = sift.detectAndCompute(left, None)
-    kp2, des2 = sift.detectAndCompute(right, None)
-    # Match keypoints in both images
-    # Based on: https://docs.opencv.org/master/dc/dc3/tutorial_py_matcher.html
-    FLANN_INDEX_KDTREE = 1
-    index_params = dict(algorithm=FLANN_INDEX_KDTREE, trees=5)
-    search_params = dict(checks=50)  # or pass empty dictionary
-    flann = cv2.FlannBasedMatcher(index_params, search_params)
-    matches = flann.knnMatch(des1, des2, k=2)
-
-    # Need to draw only good matches, so create a mask
-    matchesMask = [[0, 0] for i in range(len(matches))]
-
-    # ratio test as per Lowe's paper
-    for i, (m, n) in enumerate(matches):
-        if m.distance < 0.7 * n.distance:
-            matchesMask[i] = [1, 0]
-    # Draw the keypoint matches between both pictures
-    # Still based on: https://docs.opencv.org/master/dc/dc3/tutorial_py_matcher.html
-    draw_params = dict(matchColor=(0, 255, 0),
-                       singlePointColor=(255, 0, 0),
-                       matchesMask=matchesMask,
-                       flags=cv2.DrawMatchesFlags_DEFAULT)
-
-    img3 = cv2.drawMatchesKnn(left, kp1, right, kp2, matches, None, **draw_params)
-
-    # plt.imshow(img3,),plt.show()
-    cv2.namedWindow("Keypoint matches", cv2.WINDOW_NORMAL)
-    cv2.resizeWindow("Keypoint matches", 1920, 1080)
-    cv2.imshow("Keypoint matches", img3)
-    cv2.waitKey(0)
-    cv2.destroyAllWindows()
+def rectify_images(left, right, Kl, Dl, Kr, Dr, R, T, alpha_val=0):
+    # Perform stereo rectification
+    Rr1, Rr2, Pr1, Pr2, Q, ROI1, ROI2 = cv2.stereoRectify(Kl, Dl, Kr, Dr, (left.shape[1], left.shape[0]), R, T,
+                                                          alpha=alpha_val)
+    return Rr1, Rr2, Pr1, Pr2, Q, ROI1, ROI2
 
 
 def load_camera_params(yaml_file):
@@ -77,48 +33,83 @@ def load_camera_params(yaml_file):
     Kl = np.array(params['camera_matrix_left'], dtype=np.float64)
     Dl = np.array(params['dist_coeffs_left'], dtype=np.float64)
     Pl = np.array(params['proj_matrix_left'], dtype=np.float64)
+    Rl = np.array(params['rot_matrix_left'], dtype=np.float64)
 
     Kr = np.array(params['camera_matrix_right'], dtype=np.float64)
     Dr = np.array(params['dist_coeffs_right'], dtype=np.float64)
     Pr = np.array(params['proj_matrix_right'], dtype=np.float64)
-
+    Rr = np.array(params['rot_matrix_right'], dtype=np.float64)
     R = np.array(params['R'], dtype=np.float64)
     T = np.array(params['T'], dtype=np.float64)
 
-    return Kl, Kr, Dl, Dr, Pl, Pr, R, T
+
+    return Kl, Dl, Rl, Pl, Kr, Dr, Rr, Pr, R, T
+
+
+import yaml
+import numpy as np
+
+
+def save_camera_parameters_to_yaml(file_path, camera_matrix_left, dist_coeffs_left, rot_matrix_left, proj_matrix_left,
+                                   camera_matrix_right, dist_coeffs_right, rot_matrix_right, proj_matrix_right, R, T):
+    """
+    Save stereo camera parameters to a YAML file.
+
+    Parameters:
+        file_path (str): Path to the YAML file.
+        camera_matrix_left (np.ndarray): Intrinsic parameters of the left camera.
+        dist_coeffs_left (np.ndarray): Distortion coefficients of the left camera.
+        proj_matrix_left (np.ndarray): Projection matrix of the left camera.
+        camera_matrix_right (np.ndarray): Intrinsic parameters of the right camera.
+        dist_coeffs_right (np.ndarray): Distortion coefficients of the right camera.
+        proj_matrix_right (np.ndarray): Projection matrix of the right camera.
+        R (np.ndarray): Rotation matrix between the two cameras.
+        T (np.ndarray): Translation vector between the two cameras.
+    """
+    data = {
+        'camera_matrix_left': camera_matrix_left.tolist(),
+        'dist_coeffs_left': dist_coeffs_left.tolist(),
+        'proj_matrix_left': proj_matrix_left.tolist(),
+        'rot_matrix_left': rot_matrix_left.tolist(),
+        'camera_matrix_right': camera_matrix_right.tolist(),
+        'dist_coeffs_right': dist_coeffs_right.tolist(),
+        'rot_matrix_right': rot_matrix_right.tolist(),
+        'proj_matrix_right': proj_matrix_right.tolist(),
+        'R': R.tolist(),
+        'T': T.tolist(),
+    }
+
+    with open(file_path, 'w') as file:
+        yaml.dump(data, file)
+
+    print(f"Camera parameters saved to {file_path}")
 
 
 def main():
-    left_image = cv2.imread('images/20240809/left/L003.png', 0)
-    right_image = cv2.imread('images/20240809/right/R003.png',0)
-    cv2.equalizeHist(left_image, left_image)
-    cv2.equalizeHist(right_image, right_image)
+    path = 'images/SM3-20240815_1'
+    yaml_file = 'cfg/20240815.yaml'
+    left_images = os.listdir(os.path.join(path, 'left'))
+    right_images = os.listdir(os.path.join(path, 'right'))
 
-    K1, K2, dist1, dist2, P1, P2, R, T = load_camera_params(yaml_file='cfg/20240809.yaml')
+    left_image = cv2.imread(os.path.join(path, 'left', left_images[0]), 0)
+    right_image = cv2.imread(os.path.join(path, 'right', right_images[0]), 0)
 
-    # Perform stereo rectification
-    Rr1, Rr2, Pr1, Pr2, Q, ROI1, ROI2 = cv2.stereoRectify(K1, dist1, K2, dist2,
-                                                          (left_image.shape[1], left_image.shape[0]), R, T, alpha=1)
+    Kl, Dl, Rl, Pl, Kr, Dr, Rr, Pr, R, T = load_camera_params(yaml_file=yaml_file)
+    left_image, right_image = debugger.mask_images(left_image, right_image, thres=180)
+    Rr1, Rr2, Pr1, Pr2, Q, ROI1, ROI2 = rectify_images(left_image, right_image, Kl=Kl, Dl=Dr, Kr=Kr, Dr=Dr,
+                                                                                R=R, T=T,  alpha_val=0)
 
-    # Compute the undistortion and rectification transformation map
-    map1x, map1y = cv2.initUndistortRectifyMap(K1, dist1, Rr1, Pr1, (left_image.shape[1], left_image.shape[0]),
-                                               cv2.CV_32FC1)
-    map2x, map2y = cv2.initUndistortRectifyMap(K2, dist2, Rr2, Pr2, (left_image.shape[1], left_image.shape[0]),
-                                               cv2.CV_32FC1)
+    rect_l, rect_r = remap_rect_images(left_image, right_image, Kl=Kl, Dl=Dr, Rl=Rr1, Pl=Pr1,
+                                                                Kr=Kr, Dr=Dr, Rr=Rr2, Pr=Pr2)
 
-    # Apply the rectification maps to the images
-    rectified_left = cv2.remap(left_image, map1x, map1y, cv2.INTER_LINEAR)
-    rectified_right = cv2.remap(right_image, map2x, map2y, cv2.INTER_LINEAR)
+    rect_yaml_file = yaml_file.split('.yaml')[0] + '_rect_0.yaml'
 
-    # Display rectified images side by side
-    combined_image = np.concatenate((rectified_left, rectified_right), axis=1)
-    combined_image = add_grid_lines(combined_image, interval=300)
-    cv2.namedWindow('Rectified Images', cv2.WINDOW_NORMAL)
-    # cv2.resizeWindow('Rectified Images', int(combined_image.shape[1]/4), int(combined_image.shape[0]/4))
-    cv2.imshow('Rectified Images', combined_image)
-    cv2.waitKey(0)
-    cv2.destroyAllWindows()
-    draw_keypoints(rectified_left, rectified_right)
+    save_camera_parameters_to_yaml(rect_yaml_file, camera_matrix_left=Kl, camera_matrix_right=Kr,
+                                                   dist_coeffs_left=Dl, dist_coeffs_right=Dr,
+                                                   rot_matrix_left=Rr1, rot_matrix_right=Rr2,
+                                                   proj_matrix_left=Pr1, proj_matrix_right=Pr2, R=R, T=T)
+
+    debugger.show_stereo_images(rect_l, rect_r, name='Rectified images')
 
 
 if __name__ == '__main__':
