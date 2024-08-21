@@ -5,31 +5,8 @@ import open3d as o3d
 import matplotlib.pyplot as plt
 import yaml
 import os
+import rectify_matrix
 
-def load_stereo_parameters(yaml_file):
-    """Carrega os parâmetros intrínsecos e extrínsecos de um sistema estéreo a partir de um arquivo .yaml."""
-    with open(yaml_file, 'r') as file:
-        params = yaml.safe_load(file)
-
-    mtxL = np.array(params['mtxL'])
-    mtxR = np.array(params['mtxR'])
-    distL = np.array(params['distL'])
-    distR = np.array(params['distR'])
-    R1 = np.array(params['R1'])
-    R2 = np.array(params['R2'])
-    P1 = np.array(params['P1'])
-    P2 = np.array(params['P2'])
-    Q = np.array(params['Q'])
-
-    return mtxL, distL, R1, P1, mtxR, distR, R2, P2, Q
-
-def load_images(image_dir ):
-    """Carrega imagens das câmeras esquerda e direita."""
-    image_files_left = os.listdir(os.path.join(image_dir,'left'))
-    image_files_right = os.listdir(os.path.join(image_dir,'right'))
-    if len(image_files_left) != len(image_files_right):
-        raise ValueError("Número de imagens da câmera esquerda não corresponde ao número da câmera direita.")
-    return sorted(image_files_left), sorted(image_files_right)
 
 
 def rectify_images(imgL, imgR, mtxL, distL, R1, P1, mtxR, distR, R2, P2):
@@ -109,20 +86,25 @@ def show_stereo_images(imgR, imgL):
 
 def main():
     # Caminho para o arquivo de parâmetros
-    yaml_file = os.path.join('cfg','calib1.yaml')
-    image_dir = 'C:\\Users\\LABMETRO\\PycharmProjects\\active_stereo\\images\\Luz acesa 2'
-    file_pattern_left = 'captured_image_1_*.jpg'
-    file_pattern_right = 'captured_image_2_*.jpg'
+    yaml_file = 'cfg/20240815_rect_1.yaml'
+
+    image_dir = '/home/daniel/PycharmProjects/stereo_active/images/SM3-20240820 - RRP'
+    left_images = sorted(os.listdir(os.path.join(image_dir, 'left')))
+    right_images = sorted(os.listdir(os.path.join(image_dir, 'right')))
+    image_files_left = []
+    image_files_right = []
+    for (left,right) in zip(left_images, right_images):
+        image_files_left = sorted(os.path.join(image_dir, 'left', left))
+        image_files_right = sorted(os.path.join(image_dir, 'right', right))
 
     # Carrega os parâmetros do sistema estéreo
-    mtxL, distL, R1, P1, mtxR, distR, R2, P2, Q = load_stereo_parameters(yaml_file)
+    mtxL, distL, R1, P1, mtxR, distR, R2, P2, Q = rectify_matrix.load_camera_params(yaml_file)
 
-    image_files_left, image_files_right = load_images(image_dir)
     all_points, all_colors = [], []
 
     for imgL_path, imgR_path in zip(image_files_left, image_files_right):
-        imgL = cv2.imread(os.path.join(image_dir, 'left', imgL_path))
-        imgR = cv2.imread(os.path.join(image_dir, 'right', imgR_path))
+        imgL = cv2.imread(imgL_path)
+        imgR = cv2.imread(imgR_path)
         show_stereo_images(imgR, imgL)
         rectifiedL, rectifiedR = rectify_images(imgL, imgR, mtxL, distL, R1, P1, mtxR, distR, R2, P2)
         show_stereo_images(rectifiedR, rectifiedL)

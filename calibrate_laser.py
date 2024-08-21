@@ -2,10 +2,11 @@ import cv2
 import numpy as np
 import matplotlib.pyplot as plt
 import os
-
+import imutils
 # Scripts to debugg and rectify images
 import debugger
 import rectify_matrix
+
 
 def detect_orb_dots(image_left, image_right):
     # Initialize ORB detector
@@ -58,6 +59,20 @@ def detect_dots(image):
     return points
 
 
+def detect_dots_findcontours(image):
+    contours, herarchy = cv2.findContours(image, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+    points = []
+    # loop over the contours
+    for c in contours:
+        # compute the center of the contour
+        M = cv2.moments(c)
+        if M["m00"] != 0:
+            points.append((int(M["m10"] / M["m00"]), int(M["m01"] / M["m00"])))
+        else:
+            continue
+    return points, contours
+
+
 def search_window(image_left, image_right, point, window_size=5, search_range=1000):
     # Convert point coordinates to integers
     x, y = int(point[0]), int(point[1])
@@ -83,6 +98,8 @@ def search_window(image_left, image_right, point, window_size=5, search_range=10
                 best_match = (x_right, y)
 
     return best_match
+
+
 def match_points(points_left, points_right, threshold):
     """
     Match points between two images based on distance.
@@ -100,7 +117,34 @@ def match_points(points_left, points_right, threshold):
 
     return np.array(matched_left), np.array(matched_right)
 
+def match_points2(points_left, points_right, threshold):
+    matched_left = []
+    matched_right = []
+    for pL in points_left:
+        for pR in points_right:
+            if abs(pL[1] -pR[1]) < 5:
+                distances = abs((pL[0]-1397)-(pR[0]-23))
+                if distances < threshold:
+                    matched_left.append([pL[0], pL[1]])
+                    matched_right.append([pR[0], pR[1]])
 
+    seen = set()
+    m_left = []
+    for item in matched_left:
+        t = tuple(item)
+        if t not in seen:
+            m_left.append(item)
+            seen.add(t)
+    m_right = []
+    seen = set()
+    for item in matched_right:
+        t = tuple(item)
+        if t not in seen:
+            m_right.append(item)
+            seen.add(t)
+    # *m_left, = map(list, {*map(tuple, matched_left)})
+    # *m_right, = map(list, {*map(tuple, matched_right)})
+    return np.array(m_left), np.array(m_right)
 def draw_matched_points(image_left, image_right, m_p_left, m_p_right, color=(0, 255, 0), radius=5, thickness=2):
     # Convert the images to color if they are grayscale
     if len(image_left.shape) == 2:
@@ -113,51 +157,60 @@ def draw_matched_points(image_left, image_right, m_p_left, m_p_right, color=(0, 
         # Draw circles on the left image
         cv2.circle(image_left, tuple(int(x) for x in pt_left), radius, color, thickness)
         # Draw circles on the right image
-        cv2.circle(image_right, tuple(int(x) for x in pt_right), radius, color, thickness)
+        cv2.circle(image_right, tuple(int(x) for x in pt_right), radius, (0,255,0), thickness)
     return image_left, image_right
 
+
 def main():
-    path = 'images/SM3-20240815_1'
-    yaml_file = 'cfg/20240815.yaml'
-    left_images = os.listdir(os.path.join(path, 'left'))
-    right_images = os.listdir(os.path.join(path, 'right'))
+    path = '/home/daniel/PycharmProjects/stereo_active/images/SM3-20240815_1'
+    yaml_file = 'cfg/20240815_rect_1.yaml'
+    left_images = sorted(os.listdir(os.path.join(path, 'left')))
+    right_images = sorted(os.listdir(os.path.join(path, 'right')))
 
     left_image = cv2.imread(os.path.join(path, 'left', left_images[0]), 0)
     right_image = cv2.imread(os.path.join(path, 'right', right_images[0]), 0)
 
-    left_image, right_image = debugger.mask_images(left_image, right_image, thres=180)
-    # debugger.show_stereo_images(left_image, right_image)
-
     Kl, Dl, Rl, Pl, Kr, Dr, Rr, Pr, R, T = rectify_matrix.load_camera_params(yaml_file=yaml_file)
 
     rect_left, rect_right = rectify_matrix.remap_rect_images(left_image, right_image, Kl, Dl, Rl, Pl, Kr, Dr, Rr, Pr)
+    debugger.show_stereo_images(rect_left, rect_right, 'rect')
 
-    point_left = detect_dots(rect_left)
-    point_right = detect_dots(rect_right)
+    # Create binary mask
+    mask_left, mask_right = debugger.mask_images(rect_left, rect_right, thres=190)
+    # debugger.show_stereo_images(mask_left, mask_right, 'mask')
 
-    debug_left, debug_right = draw_matched_points(rect_left, rect_right, point_left, point_right)
-    debugger.show_stereo_images(debug_left, debug_right)
+    # Apply mask on original image
+    left_image = cv2.bitwise_and(rect_left, rect_left, mask=mask_left)
+    right_image = cv2.bitwise_and(rect_right, rect_right, mask=mask_right)
 
-    m_p_left, m_p_right = match_points(point_left, point_right, 100)
+    debugger.show_stereo_images(left_image, right_image, 'Image')
+    # Points from Blob
+    # point_left = detect_dots(rect_left)
+    # point_right = detect_dots(rect_right)
+    # # Debug what points where found on each image
+    # debug_left, debug_right = draw_matched_points(rect_left, rect_right, point_left, point_right)
+    # debugger.show_stereo_images(debug_left, debug_right, 'Blob points')
 
+    # # Matched points
+    # m_p_left, m_p_right = match_points(point_left, point_right, 100)
+    #
     # left_dp, right_dp = draw_matched_points(rect_left, rect_right, m_p_left, m_p_right, color=(0, 255, 0), radius=10)
     # debugger.show_stereo_images(left_dp, right_dp)
 
-    right_best_match = []
-    for point in point_left:
-        match = search_window(rect_left, rect_right, point, window_size=5, search_range=5)
-        if match:
-            right_best_match.append(match)
+    c_left, contours_left = detect_dots_findcontours(mask_left)
+    c_right, contours_right = detect_dots_findcontours(mask_right)
+    c_img_left = cv2.drawContours(cv2.cvtColor(mask_left, cv2.COLOR_GRAY2BGR), contours_left, -1, (0, 255, 0), 3)
+    c_img_right = cv2.drawContours(cv2.cvtColor(mask_right, cv2.COLOR_GRAY2BGR), contours_right, -1, (0, 255, 0), 3)
+    debugger.show_stereo_images(c_img_left, c_img_right, 'contours')
+    mcp_left, mcp_right = match_points2(c_left, c_right, threshold=200)
 
-    win_p_left, win_p_right = draw_matched_points(rect_left, rect_right, point_left, right_best_match, color=(0, 255, 255), radius=10)
-    debugger.show_stereo_images(win_p_left, win_p_right)
-
-    # save concatenate image with points
-    # concatenate = np.hstack((rect_left, rect_right))
-    # cv2.imwrite(os.path.join( 'concatenate.png'), concatenate)
-
+    mc_left, mc_right = draw_matched_points(left_image,right_image, mcp_left, mcp_right, color=(0, 255, 255), radius=5,
+                                            thickness=2)
+    # cv2.imshow('right', mc_right)
+    # cv2.resizeWindow('right', 800, 600)
+    # cv2.waitKey(0)
+    debugger.show_stereo_images(mc_left, mc_right, 'MatchPoints FC')
     print('wait')
 
 if __name__ == '__main__':
     main()
-

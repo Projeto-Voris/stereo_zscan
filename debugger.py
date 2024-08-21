@@ -51,6 +51,8 @@ def plot_hist(left, right):
 
 def show_stereo_images(left, right, name='Rectified Images'):
     combined_image = np.concatenate((left, right), axis=1)
+    # combined_image = cv2.line(combined_image, (0,1460), (8000, 1460), (0, 255, 0))
+    # combined_image = cv2.line(combined_image, (0,1431), (8000, 1431), (0, 255, 0))
     cv2.namedWindow(name, cv2.WINDOW_NORMAL)
     cv2.resizeWindow(name, int(combined_image.shape[1] / 4), int(combined_image.shape[0] / 4))
     cv2.imshow(name, combined_image)
@@ -59,21 +61,20 @@ def show_stereo_images(left, right, name='Rectified Images'):
 
 def mask_images(left_image, right_image, thres=180):
     if (left_image.shape.__len__() == right_image.shape.__len__()) and right_image.shape.__len__() < 3:
-        mask_left = cv2.threshold(left_image, thres, 255, cv2.THRESH_BINARY)[1]
-        mask_right = cv2.threshold(right_image, thres, 255, cv2.THRESH_BINARY)[1]
+        mask_left = cv2.threshold(cv2.GaussianBlur(left_image, (3, 3), 0), thres, 255, cv2.THRESH_BINARY)[1]
+        mask_right = cv2.threshold(cv2.GaussianBlur(right_image, (3, 3), 0), thres, 255, cv2.THRESH_BINARY)[1]
     else:
         # Get only the red spectrum to mask
-        mask_left = cv2.threshold(left_image[:, :, 2], thres, 255, cv2.THRESH_BINARY)[1]
-        mask_right = cv2.threshold(right_image[:, :, 2], thres, 255, cv2.THRESH_BINARY)[1]
+        mask_left = cv2.threshold(cv2.GaussianBlur(left_image[:, :, 2], (3, 3), 0), thres, 255, cv2.THRESH_BINARY)[1]
+        mask_right = cv2.threshold(cv2.GaussianBlur(right_image[:, :, 2], (3, 3), 0), thres, 255, cv2.THRESH_BINARY)[1]
 
-    # mask_left = cv2.morphologyEx(mask_left, cv2.MORPH_CLOSE, kernel=np.ndarray([5,5], np.uint8))
-    # mask_right = cv2.morphologyEx(mask_right, cv2.MORPH_CLOSE, kernel=np.ndarray([5,5], np.uint8))
-    mask_left = cv2.dilate(mask_left, (3,3), iterations=2)
-    mask_right = cv2.dilate(mask_right, (3,3), iterations=2)
-    masked_r = cv2.bitwise_and(right_image, right_image, mask=mask_right)
-    masked_l = cv2.bitwise_and(left_image, left_image, mask=mask_left)
+    mask_left = cv2.erode(mask_left, (3,3), iterations=2)
+    mask_right = cv2.erode(mask_right, (3,3), iterations=2)
+    mask_left = cv2.morphologyEx(mask_left, cv2.MORPH_CLOSE, kernel=np.ndarray([5,5], np.uint8))
+    mask_right = cv2.morphologyEx(mask_right, cv2.MORPH_CLOSE, kernel=np.ndarray([5,5], np.uint8))
 
-    return masked_l, masked_r
+
+    return mask_left, mask_right
 
 
 def main():

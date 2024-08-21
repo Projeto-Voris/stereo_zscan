@@ -87,22 +87,28 @@ def save_camera_parameters_to_yaml(file_path, camera_matrix_left, dist_coeffs_le
 
 def main():
     path = 'images/SM3-20240815_1'
-    yaml_file = 'cfg/20240815.yaml'
-    left_images = os.listdir(os.path.join(path, 'left'))
-    right_images = os.listdir(os.path.join(path, 'right'))
+    yaml_file = 'cfg/20240815_bouget.yaml'
+    left_images = sorted(os.listdir(os.path.join(path, 'left')))
+    right_images = sorted(os.listdir(os.path.join(path, 'right')))
+    alpha = 1 #value of rectify map (0 - used ROI that are similar, 1 - uses all image)
 
     left_image = cv2.imread(os.path.join(path, 'left', left_images[0]), 0)
     right_image = cv2.imread(os.path.join(path, 'right', right_images[0]), 0)
 
     Kl, Dl, Rl, Pl, Kr, Dr, Rr, Pr, R, T = load_camera_params(yaml_file=yaml_file)
-    left_image, right_image = debugger.mask_images(left_image, right_image, thres=180)
+    mask_left, mask_right = debugger.mask_images(left_image, right_image, thres=180)
+    debugger.show_stereo_images(left_image, right_image, 'mask')
+
+    # left_image = cv2.bitwise_and(left_image, left_image, mask=mask_left)
+    # right_image = cv2.bitwise_and(right_image, right_image, mask=mask_right)
+
     Rr1, Rr2, Pr1, Pr2, Q, ROI1, ROI2 = rectify_images(left_image, right_image, Kl=Kl, Dl=Dr, Kr=Kr, Dr=Dr,
-                                                                                R=R, T=T,  alpha_val=0)
+                                                                                R=R, T=T,  alpha_val=alpha)
 
     rect_l, rect_r = remap_rect_images(left_image, right_image, Kl=Kl, Dl=Dr, Rl=Rr1, Pl=Pr1,
                                                                 Kr=Kr, Dr=Dr, Rr=Rr2, Pr=Pr2)
 
-    rect_yaml_file = yaml_file.split('.yaml')[0] + '_rect_0.yaml'
+    rect_yaml_file = yaml_file.split('.yaml')[0] + '_rect_'+str(alpha)+'.yaml'
 
     save_camera_parameters_to_yaml(rect_yaml_file, camera_matrix_left=Kl, camera_matrix_right=Kr,
                                                    dist_coeffs_left=Dl, dist_coeffs_right=Dr,
