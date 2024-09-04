@@ -32,18 +32,20 @@ def load_camera_params(yaml_file):
         # Parse the matrices
     Kl = np.array(params['camera_matrix_left'], dtype=np.float64)
     Dl = np.array(params['dist_coeffs_left'], dtype=np.float64)
-    Pl = np.array(params['proj_matrix_left'], dtype=np.float64)
     Rl = np.array(params['rot_matrix_left'], dtype=np.float64)
+    Tl = np.array(params['t_left'], dtype=np.float64)
+    Pl = np.array(params['proj_matrix_left'], dtype=np.float64)
 
     Kr = np.array(params['camera_matrix_right'], dtype=np.float64)
     Dr = np.array(params['dist_coeffs_right'], dtype=np.float64)
-    Pr = np.array(params['proj_matrix_right'], dtype=np.float64)
     Rr = np.array(params['rot_matrix_right'], dtype=np.float64)
+    Tr = np.array(params['t_right'], dtype=np.float64)
+    Pr = np.array(params['proj_matrix_right'], dtype=np.float64)
+
     R = np.array(params['R'], dtype=np.float64)
     T = np.array(params['T'], dtype=np.float64)
 
-
-    return Kl, Dl, Rl, Pl, Kr, Dr, Rr, Pr, R, T
+    return Kl, Dl, Rl, Tl, Pl, Kr, Dr, Rr, Tr, Pr, R, T
 
 
 import yaml
@@ -90,7 +92,7 @@ def main():
     yaml_file = 'cfg/20240815_bouget.yaml'
     left_images = sorted(os.listdir(os.path.join(path, 'left')))
     right_images = sorted(os.listdir(os.path.join(path, 'right')))
-    alpha = 1 #value of rectify map (0 - used ROI that are similar, 1 - uses all image)
+    alpha = 1  # value of rectify map (0 - used ROI that are similar, 1 - uses all image)
 
     left_image = cv2.imread(os.path.join(path, 'left', left_images[0]), 0)
     right_image = cv2.imread(os.path.join(path, 'right', right_images[0]), 0)
@@ -103,17 +105,17 @@ def main():
     # right_image = cv2.bitwise_and(right_image, right_image, mask=mask_right)
 
     Rr1, Rr2, Pr1, Pr2, Q, ROI1, ROI2 = rectify_images(left_image, right_image, Kl=Kl, Dl=Dr, Kr=Kr, Dr=Dr,
-                                                                                R=R, T=T,  alpha_val=alpha)
+                                                       R=R, T=T, alpha_val=alpha)
 
     rect_l, rect_r = remap_rect_images(left_image, right_image, Kl=Kl, Dl=Dr, Rl=Rr1, Pl=Pr1,
-                                                                Kr=Kr, Dr=Dr, Rr=Rr2, Pr=Pr2)
+                                       Kr=Kr, Dr=Dr, Rr=Rr2, Pr=Pr2)
 
-    rect_yaml_file = yaml_file.split('.yaml')[0] + '_rect_'+str(alpha)+'.yaml'
+    rect_yaml_file = yaml_file.split('.yaml')[0] + '_rect_' + str(alpha) + '.yaml'
 
     save_camera_parameters_to_yaml(rect_yaml_file, camera_matrix_left=Kl, camera_matrix_right=Kr,
-                                                   dist_coeffs_left=Dl, dist_coeffs_right=Dr,
-                                                   rot_matrix_left=Rr1, rot_matrix_right=Rr2,
-                                                   proj_matrix_left=Pr1, proj_matrix_right=Pr2, R=R, T=T)
+                                   dist_coeffs_left=Dl, dist_coeffs_right=Dr,
+                                   rot_matrix_left=Rr1, rot_matrix_right=Rr2,
+                                   proj_matrix_left=Pr1, proj_matrix_right=Pr2, R=R, T=T)
 
     debugger.show_stereo_images(rect_l, rect_r, name='Rectified images')
 

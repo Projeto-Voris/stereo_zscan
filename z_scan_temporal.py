@@ -3,7 +3,6 @@ import os
 import cv2
 import numpy as np
 import matplotlib.pyplot as plt
-from mpl_toolkits.mplot3d import Axes3D
 import plotly.graph_objects as go
 import rectify_matrix
 from scipy.interpolate import RegularGridInterpolator as RGI
@@ -28,7 +27,6 @@ def plot_3d_image(image):
     ax.set_zlabel('Intensity')
     plt.show()
 
-
 def plot_3d_points(x, y, z):
     # Plot the 3D scatter plot
     fig = plt.figure(figsize=(10, 8))
@@ -42,7 +40,6 @@ def plot_3d_points(x, y, z):
     ax.set_zlabel('Z Label (array3)')
 
     plt.show()
-
 
 def points3d_cube(xy=(-5, 5), z=(0, 5), xy_step=1.0, z_step=1.0, visualize=True):
     """
@@ -73,28 +70,33 @@ def points3d_cube(xy=(-5, 5), z=(0, 5), xy_step=1.0, z_step=1.0, visualize=True)
     return cube_points
 
 
-def undistorted_points(norm_points, distortion):
+def points2d_cube(xy=(-5, 5), xy_step=1.0, visualize=True):
     """
-    Remove distortion from normalized points.
+    Create a 3D space of combination from linear arrays of X Y Z
     Parameters:
-        norm_points: (N, 2) of (X, Y) normalized points
-        distortion: [k1, k2, p1, p2, k3] distortions from camera
+        xy: Begin and end of linear space of X and Y
+        xy_step: Step size between X and Y
+        visualize: Visualize the 3D space
     Returns:
-        undistorted_points: (N, 3) of (X, Y, 1) undistorted points
+        cube_points: combination of X Y and Z
     """
-    # radius of normalize points
-    r2 = norm_points[:, 0] ** 2 + norm_points[:, 1] ** 2
-    # distortion parameters
-    k1, k2, p1, p2, k3 = distortion
+    # Create x, y, z linear space
+    x_lin = np.arange(xy[0], xy[1], step=xy_step)
+    y_lin = np.arange(xy[0], xy[1], step=xy_step)
 
-    # Radial distortion correction
-    factor = (1 + k1 * r2 + k2 * r2 ** 2 + k3 * r2 ** 3)
-    x_corrected = norm_points[:, 0] * factor + 2 * p1 * norm_points[:, 0] * norm_points[:, 1] + p2 * (
-            r2 + 2 * norm_points[:, 0] ** 2)
-    y_corrected = norm_points[:, 1] * factor + p1 * (r2 + 2 * norm_points[:, 1] ** 2) + 2 * p2 * norm_points[:,
-                                                                                                 0] * norm_points[:, 1]
-    # return with extra columns of ones
-    return np.hstack((np.stack([x_corrected, y_corrected], axis=-1), np.ones((norm_points.shape[0], 1))))
+    # Combine all variables from x_lin, y_lin and z_lin
+    mg1, mg2, mg3 = np.meshgrid(x_lin, y_lin, np.ones(x_lin.shape[0]), indexing='ij')
+    # Concatenate all vetors
+    cube_points = np.stack([mg1, mg2, mg3], axis=-1).reshape(-1, 3)
+
+    # Visualize space of points
+    if visualize:
+        plot_3d_points(x=cube_points[:, 0], y=cube_points[:, 1], z=cube_points[:, 2])
+
+    return cube_points
+
+
+
 
 
 def project_points(points_ccs, K, dist, R, T):
@@ -151,6 +153,7 @@ def interpolate_points(images, projected_points, method='linear'):
 
     return inter_pts
 
+
 def read_images(path, images_list):
     """
     Read all images from specified path.
@@ -163,15 +166,15 @@ def read_images(path, images_list):
     height, width = cv2.imread(os.path.join(path, str(images_list[0])), 0).shape
     images = np.zeros((height, width, len(images_list)), dtype=int)
     for n in range(len(images_list)):
-        images[:, :, n] = cv2.imread(os.path.join(path, str(images_list[n])), 0)
+        images[:, :, n] = cv2.imread(os.path.join(path, str(images_list[n])), cv2.IMREAD_GRAYSCALE)
 
     return images
 
 
 def main():
     # Paths for yaml file and images
-    yaml_file = 'cfg/20240815.yaml'
-    images_path = 'images/SM3-20240820 - RRP'
+    yaml_file = 'cfg/20240828.yaml'
+    images_path = 'images/SM3-20240828 - calib 10x10'
 
     # Identify all images from path file
     left_images = read_images(os.path.join(images_path, 'left', ),
@@ -181,13 +184,17 @@ def main():
                                sorted(os.listdir(os.path.join(images_path, 'right'))))
 
     # Read file containing all calibration parameters from stereo system
-    Kl, Dl, Rl, Pl, Kr, Dr, Rr, Pr, R, T = rectify_matrix.load_camera_params(yaml_file=yaml_file)
+    Kl, Dl, Rl, Tl, _, Kr, Dr, Rr, Tr, _, R, T = rectify_matrix.load_camera_params(yaml_file=yaml_file)
 
     # Construct a 3D points (X,Y,Z) based on initial conditions and steps
-    points_3d = points3d_cube(xy=(-1, 1), z=(0, 1), xy_step=0.5, z_step=0.5, visualize=False)
-    projected_pts = project_points(points_ccs=points_3d, K=Kl, dist=Dl, R=Rl, T=T.T)
-    inter_points = interpolate_points(left_images, projected_pts, method='linear')
+    points_3d = points3d_cube(xy=(-0.5, 0.5), z=(0, 2), xy_step=0.01, z_step=0.1, visualize=False)
+    projected_pts_L = project_points(points_ccs=points_3d, K=Kl, dist=Dl, R=Rl, T=Tl.T)
+    # inter_points = interpolate_points(left_images, projected_pts_L, method='linear')
+    image_points = plot_points_on_image(left_images[:,:,6], projected_pts_L)
+    cv2.imshow('image', image_points)
+    cv2.waitKey(0)
 
 
 if __name__ == '__main__':
     main()
+    cv2.destroyAllWindows()
