@@ -34,18 +34,16 @@ def load_camera_params(yaml_file):
     Dl = np.array(params['dist_coeffs_left'], dtype=np.float64)
     Rl = np.array(params['rot_matrix_left'], dtype=np.float64)
     Tl = np.array(params['t_left'], dtype=np.float64)
-    Pl = np.array(params['proj_matrix_left'], dtype=np.float64)
 
     Kr = np.array(params['camera_matrix_right'], dtype=np.float64)
     Dr = np.array(params['dist_coeffs_right'], dtype=np.float64)
     Rr = np.array(params['rot_matrix_right'], dtype=np.float64)
     Tr = np.array(params['t_right'], dtype=np.float64)
-    Pr = np.array(params['proj_matrix_right'], dtype=np.float64)
 
     R = np.array(params['R'], dtype=np.float64)
     T = np.array(params['T'], dtype=np.float64)
 
-    return Kl, Dl, Rl, Tl, Pl, Kr, Dr, Rr, Tr, Pr, R, T
+    return Kl, Dl, Rl, Tl, Kr, Dr, Rr, Tr, R, T
 
 
 import yaml
