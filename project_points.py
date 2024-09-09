@@ -37,7 +37,7 @@ def plot_3d_image(image):
     ax.set_zlabel('Intensity')
     plt.show()
 
-def plot_3d_correl(x,y,z,correl):
+def plot_3d_correl(x,y,z,correl, title='Plot 3D of max correlation points'):
         """
         Plot 3D points as scatter points where color is based on Z value
         Parameters:
@@ -49,7 +49,7 @@ def plot_3d_correl(x,y,z,correl):
         # Plot the 3D scatter plot
         fig = plt.figure(figsize=(10, 8))
         ax = fig.add_subplot(111, projection='3d')
-
+        ax.title.set_text(title)
         scatter = ax.scatter(x, y, z, c=correl, cmap='viridis', marker='o')
         # ax.set_zlim(0, np.max(z))
         colorbar = plt.colorbar(scatter, ax=ax, shrink=0.5, aspect=5)
@@ -274,7 +274,7 @@ def read_images(path, images_list):
 def main():
     # Paths for yaml file and images
     yaml_file = 'cfg/20240828_bouget.yaml'
-    images_path = 'images/SM3-20240828 - GC (f50)'
+    images_path = '/home/daniel/Insync/daniel.regner@labmetro.ufsc.br/Google Drive - Shared drives/VORIS  - Equipe/Sistema de Medição 3 - Stereo Ativo - Projeção Laser/Imagens/Calibração/SM3-20240828 - calib 10x10'
 
     # # Identify all images from path file
     left_images = read_images(os.path.join(images_path, 'left', ),
@@ -286,7 +286,7 @@ def main():
     Kl, Dl, Rl, Tl, Kr, Dr, Rr, Tr, R, T = rectify_matrix.load_camera_params(yaml_file=yaml_file)
     # xyz_points = z_scan_temporal.points3d_cube(xy=(-1, 1), z=(0, 1), xy_step=0.1, z_step=0.5, visualize=False)
 
-    xy_points = points2d_plane(xy=(-300, 300), xy_step=10, visualize=False)
+    xy_points = points2d_plane(xy=(-300, 300), xy_step=10, visualize=True)
     uv_points_L = gcs2ccs(xy_points, Kl, Dl, Rl, Tl)
     uv_points_R = gcs2ccs(xy_points, Kr, Dr, Rr, Tr)
     output_image_L = plot_points_on_image(image=left_images[:, :, 11], points=uv_points_L, color=(0, 255, 0), radius=5,

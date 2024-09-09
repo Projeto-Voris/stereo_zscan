@@ -5,11 +5,11 @@ import cv2
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.ndimage import map_coordinates
+from scipy.ndimage import maximum_filter
 
 import rectify_matrix
 import project_points
 import cupy as cp
-
 
 
 def plot_2d_planes(xyz):
@@ -65,6 +65,7 @@ def plot_2d_planes(xyz):
     plt.tight_layout()
     plt.show()
 
+
 def interpolate_points(images, projected_points, method='linear'):
     """
     Interpolate points from images and projected points.
@@ -86,52 +87,9 @@ def interpolate_points(images, projected_points, method='linear'):
         # Create the interpolation function for each image
 
         # Perform interpolation for all projected points
-        inter_Igray[:, n] = map_coordinates(images[:, :, n], projected_points_uv, order=1, mode='constant', cval=0)
+        inter_Igray[:, n] = map_coordinates(images[:, :, n], projected_points_uv, order=3, mode='constant', cval=0)
 
     return inter_Igray
-
-
-def temp_cross_correlation_gpu(left_Igray, right_Igray, points_3d):
-    # Convert data to GPU arrays using CuPy
-    left_Igray = cp.asarray(left_Igray, dtype=cp.float32)
-    right_Igray = cp.asarray(right_Igray, dtype=cp.float32)
-
-    # Calculate the mean of non-zero elements
-    left_mean_inds = mean_ignore_zeros_gpu(left_Igray, axis=0)
-    right_mean_inds = mean_ignore_zeros_gpu(right_Igray, axis=0)
-
-    # Perform batch processing to avoid large memory allocations
-    batch_size = 1000  # Adjust batch size to balance performance and memory usage
-    num_points = left_Igray.shape[0]
-    num_batches = (num_points + batch_size - 1) // batch_size  # Calculate number of batches
-
-    hmax_list = []
-    Imax_list = []
-
-    for batch_idx in range(num_batches):
-        start_idx = batch_idx * batch_size
-        end_idx = min((batch_idx + 1) * batch_size, num_points)
-
-        # Compute num and den for each batch using CuPy operations
-        num = cp.sum(
-            (left_Igray[start_idx:end_idx] - left_mean_inds) * (right_Igray[start_idx:end_idx] - right_mean_inds),
-            axis=1)
-        den = cp.sqrt(cp.sum((left_Igray[start_idx:end_idx] - left_mean_inds) ** 2, axis=1)) * cp.sqrt(
-            cp.sum((right_Igray[start_idx:end_idx] - right_mean_inds) ** 2, axis=1))
-
-        ho = num / den
-        z_size = cp.unique(points_3d[:, 2]).shape[0]
-        hmax = cp.zeros((end_idx - start_idx) // z_size, dtype=cp.float32)
-        Imax = cp.zeros((end_idx - start_idx) // z_size, dtype=cp.float32)
-
-        for k in range((end_idx - start_idx) // z_size):
-            hmax[k] = cp.max(ho[k * z_size:(k + 1) * z_size])
-            Imax[k] = cp.argmax(ho[k * z_size:(k + 1) * z_size]) + k * z_size + 1
-
-        hmax_list.extend(cp.asnumpy(hmax))  # Convert to NumPy arrays if needed
-        Imax_list.extend(cp.asnumpy(Imax))
-
-    return cp.array(hmax_list), cp.array(Imax_list)
 
 
 def temp_cross_correlation(left_Igray, right_Igray, points_3d):
@@ -161,13 +119,62 @@ def temp_cross_correlation(left_Igray, right_Igray, points_3d):
         # Find the index of the maximum correlation value
         Imax[k] = np.nanargmax(ho_range) + k * z_size
 
-    return hmax, Imax
+    return hmax, Imax, ho
+
+
+def map_to_uv_grid(hmax, imax, uv_points, image_shape):
+    """
+    Map the temporal correlation values to a 2D UV grid.
+
+    Parameters:
+    hmax: 1D array of maximum temporal correlation values.
+    uv_points: (2, N) array of UV coordinates for all tested points.
+    image_shape: Tuple of image dimensions (height, width).
+
+    Returns:
+    uv_grid: 2D grid (image_shape) with correlation values.
+    uv_index_grid: 2D grid of the same size to store index positions of the maximum values.
+    """
+
+    uv_filter = uv_points[:, np.asarray(imax, np.int32)]
+    hmax_filter = hmax[np.asarray(imax, np.int32)]
+    # Initialize the UV grid and index grid with zeros
+    uv_grid = np.zeros(image_shape)
+
+    # Iterate over all UV positions and map the hmax values
+    for k in range(uv_filter.shape[1]):
+        u = int(round(uv_filter[0, k]))
+        v = int(round(uv_filter[1, k]))
+        if 0 <= u < image_shape[1] and 0 <= v < image_shape[0]:
+            uv_grid[u, v] = hmax_filter[k]*255
+
+    return uv_grid
+
+
+def find_max_correlation_indices(uv_grid, kernel_size=(3, 3)):
+    """
+    Find the indices of the maximum correlation values in each neighborhood.
+
+    Parameters:
+    uv_grid: 2D grid of temporal correlation values corresponding to UV coordinates.
+    kernel_size: Tuple indicating the size of the sliding window (e.g., (3, 3) for a 3x3 kernel).
+
+    Returns:
+    max_indices: 2D array with the indices of the maximum correlation values in each neighborhood.
+    """
+    # Use maximum_filter to find the maximum value in a kernel-sized neighborhood
+    max_correlation = maximum_filter(uv_grid, size=kernel_size)
+
+    # Find the indices where the maximum correlation occurs
+    max_indices = np.argwhere(uv_grid == max_correlation)
+
+    return max_indices
 
 
 def main():
     # Paths for yaml file and images
     yaml_file = 'cfg/20240828_bouget.yaml'
-    images_path = 'images/SM3-20240828 - GC (f50)'
+    images_path = '/home/daniel/Insync/daniel.regner@labmetro.ufsc.br/Google Drive - Shared drives/VORIS  - Equipe/Sistema de Medição 3 - Stereo Ativo - Projeção Laser/Imagens/Testes/SM3-20240828 - GC (f50)'
     t0 = time.time()
     print('Initiate Algorithm')
     # Identify all images from path file
@@ -200,27 +207,31 @@ def main():
     inter_points_R = interpolate_points(right_images, uv_points_r, method='linear')
 
     t4 = time.time()
-    mask_colored = points_3d[:, 2] == 0
-    xyz_colored = points_3d[mask_colored]
-    # project_points.plot_3d_points(x=xyz_colored[:, 0], y=xyz_colored[:, 1], z=xyz_colored[:, 2],
-    #                               color=inter_points_L[mask_colored, 0])
-    # project_points.plot_3d_points(x=xyz_colored[:, 0], y=xyz_colored[:, 1], z=xyz_colored[:, 2],
-    #                               color=inter_points_R[mask_colored, 0])
 
     print("Interpolate \n time: {} ms".format(round((t4 - t3) * 1e3, 2)))
 
-    hmax, imax = temp_cross_correlation(inter_points_L, inter_points_R, points_3d)
-    filtered_3d = points_3d[np.asarray(imax[hmax > 0.8], np.int32)]
-
-
+    hmax, imax, ho = temp_cross_correlation(inter_points_L, inter_points_R, points_3d)
+    filtered_3d_max = points_3d[np.asarray(imax[hmax > 0.8], np.int32)]
+    filtered_3d = points_3d[np.asarray(imax, np.int32)]
 
     t5 = time.time()
     print("Cross Correlation yaml \n time: {} ms".format(round((t5 - t4) * 1e3, 2)))
 
     plt.figure()
     plt.plot(hmax)
-    project_points.plot_3d_correl(filtered_3d[:, 0], filtered_3d[:, 1], filtered_3d[:, 2], correl=hmax[hmax > 0.8])
+    plt.title("Hmax")
+    # Map the temporal correlation values to the UV grid
+    uv_grid = map_to_uv_grid(ho, imax, uv_points_l[:2, :], left_images.shape[:2])
+    # Find indices of maximum correlation
+    kernel_size = (3, 3)  # Define the kernel size
+    max_indices = find_max_correlation_indices(uv_grid, kernel_size)
+    space_tempo_filter_3d = points_3d[np.asarray(max_indices, np.int32)]
 
+    project_points.plot_3d_correl(filtered_3d_max[:, 0], filtered_3d_max[:, 1], filtered_3d_max[:, 2],
+                                  correl=hmax[hmax > 0.8], title="Hmax > 0.8")
+    project_points.plot_3d_correl(filtered_3d[:, 0], filtered_3d[:, 1], filtered_3d[:, 2], correl=hmax, title="Hmax")
+    project_points.plot_3d_correl(space_tempo_filter_3d[:, 0], space_tempo_filter_3d[:, 1], space_tempo_filter_3d[:, 2],
+                                  correl=hmax[max_indices], title="Hmax space")
     t6 = time.time()
     print('Ploted 3D points and correlation data \n time: {} ms'.format(round((t6 - t5) * 1e3, 2)))
     print("Points max correlation: {}".format(filtered_3d.shape[0]))
