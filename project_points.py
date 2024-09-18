@@ -13,83 +13,7 @@ import rectify_matrix
 import debugger
 
 
-def plot_3d_image(image):
-    """
-    Plot image on 3D graph where Z is the intensity of pixel
-    Parameters:
-        image: image to be plotted
-    """
-    # Create x and y coordinates
-    x = np.arange(0, image.shape[1])
-    y = np.arange(0, image.shape[0])
-    x, y = np.meshgrid(x, y)
 
-    # Create the figure and 3D axis
-    fig = plt.figure(figsize=(10, 8))
-    ax = fig.add_subplot(111, projection='3d')
-
-    # Plot the surface
-    ax.plot_surface(x, y, image, cmap='gray')
-
-    # Add labels and show the plot
-    ax.set_xlabel('X')
-    ax.set_ylabel('Y')
-    ax.set_zlabel('Intensity')
-    plt.show()
-
-def plot_3d_correl(x,y,z,correl, title='Plot 3D of max correlation points'):
-        """
-        Plot 3D points as scatter points where color is based on Z value
-        Parameters:
-            x: array of x positions
-            y: array of y positions
-            z: array of z positions
-            color: Vector of point intensity grayscale
-        """
-        # Plot the 3D scatter plot
-        fig = plt.figure(figsize=(10, 8))
-        ax = fig.add_subplot(111, projection='3d')
-        ax.title.set_text(title)
-        scatter = ax.scatter(x, y, z, c=correl, cmap='viridis', marker='o')
-        # ax.set_zlim(0, np.max(z))
-        colorbar = plt.colorbar(scatter, ax=ax, shrink=0.5, aspect=5)
-        colorbar.set_label('Correlation Coeficient')
-
-        # Add labels
-        ax.set_xlabel('X [mm]')
-        ax.set_ylabel('Y [mm]')
-        ax.set_zlabel('Z [mm]')
-
-        plt.show()
-def plot_3d_points(x, y, z, color=None):
-    """
-    Plot 3D points as scatter points where color is based on Z value
-    Parameters:
-        x: array of x positions
-        y: array of y positions
-        z: array of z positions
-        color: Vector of point intensity grayscale
-    """
-    if color is None:
-        color = z
-        cmap = 'viridis'
-    else:
-        cmap = 'gray'
-    # Plot the 3D scatter plot
-    fig = plt.figure(figsize=(10, 8))
-    ax = fig.add_subplot(111, projection='3d')
-
-    scatter = ax.scatter(x, y, z, c=color, cmap=cmap, marker='o')
-    # ax.set_zlim(0, np.max(z))
-    colorbar = plt.colorbar(scatter, ax=ax, shrink=0.5, aspect=5)
-    colorbar.set_label('Z Value Gradient')
-
-    # Add labels
-    ax.set_xlabel('X [mm]')
-    ax.set_ylabel('Y [mm]')
-    ax.set_zlabel('Z [mm]')
-
-    plt.show()
 
 
 def points3d_cube(x_lim=(-5, 5), y_lim=(-5, 5), z_lim=(0, 5), xy_step=1.0, z_step=1.0, visualize=True):
@@ -117,10 +41,38 @@ def points3d_cube(x_lim=(-5, 5), y_lim=(-5, 5), z_lim=(0, 5), xy_step=1.0, z_ste
 
     # Visualize space of points
     if visualize:
-        plot_3d_points(x=cube_points[:, 0], y=cube_points[:, 1], z=cube_points[:, 2])
+        debugger.plot_3d_points(x=cube_points[:, 0], y=cube_points[:, 1], z=cube_points[:, 2])
 
     return cube_points
 
+def points3d_cube_z(x_lim=(-5, 5), y_lim=(-5, 5), z_lim=(0, 5), xy_step=1.0, z_step=1.0, visualize=True):
+    """
+    Create a 3D space of combination from linear arrays of X Y Z
+    Parameters:
+        x_lim: Begin and end of linear space of X
+        y_lim: Begin and end of linear space of Y
+        z_lim: Begin and end of linear space of Z
+        xy_step: Step size between X and Y
+        z_step: Step size between Z and X
+        visualize: Visualize the 3D space
+    Returns:
+        cube_points: combination of X Y and Z
+    """
+    # Create x, y, z linear space
+    z_lin = np.arange(z_lim[0], z_lim[1], step=z_step)
+    x_lin = np.zeros(z_lin.size)
+    y_lin = np.zeros(z_lin.size)
+
+    # Combine all variables from x_lin, y_lin and z_lin
+    mg1, mg2, mg3 = np.meshgrid(x_lin, y_lin, z_lin, indexing='ij')
+    # Concatenate all vetors
+    cube_points = np.stack([mg1, mg2, mg3], axis=-1).reshape(-1, 3)
+
+    # Visualize space of points
+    if visualize:
+        debugger.plot_3d_points(x=cube_points[:, 0], y=cube_points[:, 1], z=cube_points[:, 2])
+
+    return cube_points
 
 def points2d_plane(xy=(-5, 5), xy_step=1.0, visualize=True):
     """
@@ -143,7 +95,7 @@ def points2d_plane(xy=(-5, 5), xy_step=1.0, visualize=True):
 
     # Visualize space of points
     if visualize:
-        plot_3d_points(x=plane_points[:, 0], y=plane_points[:, 1], z=plane_points[:, 2])
+        debugger.plot_3d_points(x=plane_points[:, 0], y=plane_points[:, 1], z=plane_points[:, 2])
 
     return plane_points
 
@@ -254,39 +206,41 @@ def plot_points_on_image(image, points, color=(0, 255, 0), radius=5, thickness=2
     return output_image
 
 
-def read_images(path, images_list):
+def read_images(path, images_list, n_images):
     """
-    Read all images from specified path.
+    Read all images from the specified path and stack them into a single array.
     Parameters:
         path: (string) path to images folder.
-        images_list: (list, string) list of images names.
-    Return:
-        images: (width, height, number images) array of image.
+        images_list: (list of strings) list of image names.
+    Returns:
+        images: (height, width, number of images) array of images.
     """
-    height, width = cv2.imread(os.path.join(path, str(images_list[0])), 0).shape
-    images = np.zeros((height, width, len(images_list)), dtype=int)
-    for n in range(len(images_list)):
-        images[:, :, n] = cv2.imread(os.path.join(path, str(images_list[n])), cv2.IMREAD_GRAYSCALE)
+    # Read all images using list comprehension
+    images = [cv2.imread(os.path.join(path, str(img_name)), cv2.IMREAD_GRAYSCALE) for img_name in images_list[0:n_images]]
+
+    # Convert list of images to a single 3D NumPy array
+    images = np.stack(images, axis=-1).astype(np.uint8)  # Convert to uint8
 
     return images
-
 
 def main():
     # Paths for yaml file and images
     yaml_file = 'cfg/20240828_bouget.yaml'
     images_path = '/home/daniel/Insync/daniel.regner@labmetro.ufsc.br/Google Drive - Shared drives/VORIS  - Equipe/Sistema de Medição 3 - Stereo Ativo - Projeção Laser/Imagens/Calibração/SM3-20240828 - calib 10x10'
-
+    Nimg = 15
     # # Identify all images from path file
     left_images = read_images(os.path.join(images_path, 'left', ),
-                              sorted(os.listdir(os.path.join(images_path, 'left'))))
+                              sorted(os.listdir(os.path.join(images_path, 'left'))), n_images=Nimg)
     right_images = read_images(os.path.join(images_path, 'right', ),
-                               sorted(os.listdir(os.path.join(images_path, 'right'))))
+                               sorted(os.listdir(os.path.join(images_path, 'right'))), n_images=Nimg)
 
     # Read file containing all calibration parameters from stereo system
     Kl, Dl, Rl, Tl, Kr, Dr, Rr, Tr, R, T = rectify_matrix.load_camera_params(yaml_file=yaml_file)
     # xyz_points = z_scan_temporal.points3d_cube(xy=(-1, 1), z=(0, 1), xy_step=0.1, z_step=0.5, visualize=False)
 
-    xy_points = points2d_plane(xy=(-300, 300), xy_step=10, visualize=True)
+    # xy_points = points2d_plane(xy=(-300, 300), xy_step=10, visualize=True)
+    # xy_points = points3d_cube_z(x_lim=(-50, 50), y_lim=(-50, 50), z_lim=(-20, 20), xy_step=1, z_step=0.5, visualize=True)
+    xy_points = points3d_cube(x_lim=(-100, 250), y_lim=(-50, 250), z_lim=(-1, 1), xy_step=10, z_step=1, visualize=True)
     uv_points_L = gcs2ccs(xy_points, Kl, Dl, Rl, Tl)
     uv_points_R = gcs2ccs(xy_points, Kr, Dr, Rr, Tr)
     output_image_L = plot_points_on_image(image=left_images[:, :, 11], points=uv_points_L, color=(0, 255, 0), radius=5,

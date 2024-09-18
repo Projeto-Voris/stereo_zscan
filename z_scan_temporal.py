@@ -7,6 +7,7 @@ import matplotlib.pyplot as plt
 from scipy.ndimage import map_coordinates
 from scipy.ndimage import maximum_filter
 
+import debugger
 import rectify_matrix
 import project_points
 import cupy as cp
@@ -120,122 +121,63 @@ def temp_cross_correlation(left_Igray, right_Igray, points_3d):
         Imax[k] = np.nanargmax(ho_range) + k * z_size
 
     return hmax, Imax, ho
-
-
-def map_to_uv_grid(hmax, imax, uv_points, image_shape):
-    """
-    Map the temporal correlation values to a 2D UV grid.
-
-    Parameters:
-    hmax: 1D array of maximum temporal correlation values.
-    uv_points: (2, N) array of UV coordinates for all tested points.
-    image_shape: Tuple of image dimensions (height, width).
-
-    Returns:
-    uv_grid: 2D grid (image_shape) with correlation values.
-    uv_index_grid: 2D grid of the same size to store index positions of the maximum values.
-    """
-
-    uv_filter = uv_points[:, np.asarray(imax, np.int32)]
-    hmax_filter = hmax[np.asarray(imax, np.int32)]
-    # Initialize the UV grid and index grid with zeros
-    uv_grid = np.zeros(image_shape)
-
-    # Iterate over all UV positions and map the hmax values
-    for k in range(uv_filter.shape[1]):
-        u = int(round(uv_filter[0, k]))
-        v = int(round(uv_filter[1, k]))
-        if 0 <= u < image_shape[1] and 0 <= v < image_shape[0]:
-            uv_grid[u, v] = hmax_filter[k]*255
-
-    return uv_grid
-
-
-def find_max_correlation_indices(uv_grid, kernel_size=(3, 3)):
-    """
-    Find the indices of the maximum correlation values in each neighborhood.
-
-    Parameters:
-    uv_grid: 2D grid of temporal correlation values corresponding to UV coordinates.
-    kernel_size: Tuple indicating the size of the sliding window (e.g., (3, 3) for a 3x3 kernel).
-
-    Returns:
-    max_indices: 2D array with the indices of the maximum correlation values in each neighborhood.
-    """
-    # Use maximum_filter to find the maximum value in a kernel-sized neighborhood
-    max_correlation = maximum_filter(uv_grid, size=kernel_size)
-
-    # Find the indices where the maximum correlation occurs
-    max_indices = np.argwhere(uv_grid == max_correlation)
-
-    return max_indices
-
-
 def main():
     # Paths for yaml file and images
     yaml_file = 'cfg/20240828_bouget.yaml'
-    images_path = '/home/daniel/Insync/daniel.regner@labmetro.ufsc.br/Google Drive - Shared drives/VORIS  - Equipe/Sistema de Medição 3 - Stereo Ativo - Projeção Laser/Imagens/Testes/SM3-20240828 - GC (f50)'
+    images_path = '/home/daniel/Insync/daniel.regner@labmetro.ufsc.br/Google Drive - Shared drives/VORIS  - Equipe/Sistema de Medição 3 - Stereo Ativo - Projeção Laser/Imagens/Testes/SM3-20240912 - random noise'
+    Nimg = 20
     t0 = time.time()
-    print('Initiate Algorithm')
+    print('Initiate Algorithm with {} images'.format(Nimg))
     # Identify all images from path file
     left_images = project_points.read_images(os.path.join(images_path, 'left', ),
-                                             sorted(os.listdir(os.path.join(images_path, 'left'))))
+                                             sorted(os.listdir(os.path.join(images_path, 'left'))), n_images=Nimg)
 
     right_images = project_points.read_images(os.path.join(images_path, 'right', ),
-                                              sorted(os.listdir(os.path.join(images_path, 'right'))))
+                                              sorted(os.listdir(os.path.join(images_path, 'right'))), n_images=Nimg)
+
     t1 = time.time()
-    print('Got {} left and right images: \n time: {} ms'.format(left_images.shape[2], round((t1 - t0) * 1e3, 2)))
+    print('Got {} left and right images: \n dt: {} ms'.format(right_images.shape[2]+left_images.shape[2], round((t1 - t0) * 1e3, 2)))
+
     # Read file containing all calibration parameters from stereo system
     Kl, Dl, Rl, Tl, Kr, Dr, Rr, Tr, R, T = rectify_matrix.load_camera_params(yaml_file=yaml_file)
 
-    t2 = time.time()
-    print("Read yaml \n time: {} ms".format(round((t2 - t1) * 1e3, 2)))
+
     # Construct a 3D points (X,Y,Z) based on initial conditions and steps
-    points_3d = project_points.points3d_cube(x_lim=(-100, 100), y_lim=(-100, 100), z_lim=(0, 5), xy_step=2, z_step=0.1,
+    points_3d = project_points.points3d_cube(x_lim=(-10, 10), y_lim=(-10, 10), z_lim=(-500, 500), xy_step=1, z_step=0.1,
                                              visualize=False)
     # Project points on Left and right
     uv_points_l = project_points.gcs2ccs(points_3d, Kl, Dl, Rl, Tl)
     uv_points_r = project_points.gcs2ccs(points_3d, Kr, Dr, Rr, Tr)
-    _, valid_mask_l = project_points.filter_points_in_bounds(uv_points_l, left_images.shape[0], left_images.shape[1])
-    _, valid_mask_r = project_points.filter_points_in_bounds(uv_points_r, right_images.shape[0], right_images.shape[1])
-    # Filter values
-    valid_mask = valid_mask_l & valid_mask_r
-    t3 = time.time()
-    print("Project points \n time: {} ms".format(round((t3 - t2) * 1e3, 2)))
+    # _, valid_mask_l = project_points.filter_points_in_bounds(uv_points_l, left_images.shape[0], left_images.shape[1])
+    # _, valid_mask_r = project_points.filter_points_in_bounds(uv_points_r, right_images.shape[0], right_images.shape[1])
+    # # Filter values
+    # valid_mask = valid_mask_l & valid_mask_r
 
+    t3 = time.time()
+    print("Project points \n dt: {} ms".format(round((t3 - t1) * 1e3, 2)))
+
+    # Interpolate reprojected points to image bounds (return pixel intensity)
     inter_points_L = interpolate_points(left_images, uv_points_l, method='linear')
     inter_points_R = interpolate_points(right_images, uv_points_r, method='linear')
 
     t4 = time.time()
 
-    print("Interpolate \n time: {} ms".format(round((t4 - t3) * 1e3, 2)))
+    print("Interpolate \n dt: {} ms".format(round((t4 - t3) * 1e3, 2)))
 
+    # Temporal correlation for L and R interpolated points
     hmax, imax, ho = temp_cross_correlation(inter_points_L, inter_points_R, points_3d)
     filtered_3d_max = points_3d[np.asarray(imax[hmax > 0.8], np.int32)]
     filtered_3d = points_3d[np.asarray(imax, np.int32)]
 
     t5 = time.time()
-    print("Cross Correlation yaml \n time: {} ms".format(round((t5 - t4) * 1e3, 2)))
+    print("Cross Correlation yaml \n dt: {} ms".format(round((t5 - t4) * 1e3, 2)))
 
-    plt.figure()
-    plt.plot(hmax)
-    plt.title("Hmax")
-    # Map the temporal correlation values to the UV grid
-    uv_grid = map_to_uv_grid(ho, imax, uv_points_l[:2, :], left_images.shape[:2])
-    # Find indices of maximum correlation
-    kernel_size = (3, 3)  # Define the kernel size
-    max_indices = find_max_correlation_indices(uv_grid, kernel_size)
-    space_tempo_filter_3d = points_3d[np.asarray(max_indices, np.int32)]
-
-    project_points.plot_3d_correl(filtered_3d_max[:, 0], filtered_3d_max[:, 1], filtered_3d_max[:, 2],
-                                  correl=hmax[hmax > 0.8], title="Hmax > 0.8")
-    project_points.plot_3d_correl(filtered_3d[:, 0], filtered_3d[:, 1], filtered_3d[:, 2], correl=hmax, title="Hmax")
-    project_points.plot_3d_correl(space_tempo_filter_3d[:, 0], space_tempo_filter_3d[:, 1], space_tempo_filter_3d[:, 2],
-                                  correl=hmax[max_indices], title="Hmax space")
+    debugger.plot_point_correl(points_3d, ho)
+    debugger.plot_3d_correl(filtered_3d[:, 0], filtered_3d[:, 1], filtered_3d[:, 2], correl=hmax, title="Hmax total for {} images".format(Nimg))
     t6 = time.time()
-    print('Ploted 3D points and correlation data \n time: {} ms'.format(round((t6 - t5) * 1e3, 2)))
+    print('Ploted 3D points and correlation data \n dt: {} ms'.format(round((t6 - t5) * 1e3, 2)))
     print("Points max correlation: {}".format(filtered_3d.shape[0]))
-    plot_2d_planes(filtered_3d)
+    # plot_2d_planes(filtered_3d)
 
 
 if __name__ == '__main__':
