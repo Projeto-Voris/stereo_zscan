@@ -85,6 +85,58 @@ def plot_3d_points(x, y, z, color=None):
 
     plt.show()
 
+def plot_2d_planes(xyz):
+    # Extract X, Y, Z coordinates
+    # Extract X, Y, Z coordinates
+    X = xyz[:, 0]
+    Y = xyz[:, 1]
+    Z = xyz[:, 2]
+
+    # Create a figure with 2 rows and 3 columns for subplots
+    fig, ax = plt.subplots(2, 3, figsize=(18, 10))
+
+    # Plot XY projection
+    ax[0, 0].scatter(X, Y, c='b', marker='o')
+    ax[0, 0].set_xlabel('X')
+    ax[0, 0].set_ylabel('Y')
+    ax[0, 0].set_title('XY Projection')
+    ax[0, 0].grid()
+
+    # Plot XZ projection
+    ax[0, 1].scatter(X, Z, c='r', marker='o')
+    ax[0, 1].set_xlabel('X')
+    ax[0, 1].set_ylabel('Z')
+    ax[0, 1].set_title('XZ Projection')
+    ax[0, 1].grid()
+
+    # Plot YZ projection
+    ax[0, 2].scatter(Y, Z, c='g', marker='o')
+    ax[0, 2].set_xlabel('Y')
+    ax[0, 2].set_ylabel('Z')
+    ax[0, 2].set_title('YZ Projection')
+    ax[0, 2].grid()
+
+    # Plot X distribution
+    ax[1, 0].hist(X, bins=20, color='b', alpha=0.7)
+    ax[1, 0].set_xlabel('X')
+    ax[1, 0].set_ylabel('Frequency')
+    ax[1, 0].set_title('X Distribution')
+
+    # Plot Y distribution
+    ax[1, 1].hist(Y, bins=20, color='r', alpha=0.7)
+    ax[1, 1].set_xlabel('Y')
+    ax[1, 1].set_ylabel('Frequency')
+    ax[1, 1].set_title('Y Distribution')
+
+    # Plot Z distribution
+    ax[1, 2].hist(Z, bins=20, color='g', alpha=0.7)
+    ax[1, 2].set_xlabel('Z')
+    ax[1, 2].set_ylabel('Frequency')
+    ax[1, 2].set_title('Z Distribution')
+
+    # Adjust layout to prevent overlap
+    plt.tight_layout()
+    plt.show()
 
 def plot_hist(left, right):
     if left.shape.__len__() != right.shape.__len__():
@@ -140,6 +192,32 @@ def plot_point_correl(xyz, ho):
         plt.grid(True)
         plt.title(xyz[x_val * z_size, :])
     plt.show()
+
+def plot_points_on_image(image, points, color=(0, 255, 0), radius=5, thickness=2):
+    """
+    Plot points on an image.
+
+    Parameters:
+    - image: The input image on which points will be plotted.
+    - points: List of (u, v) coordinates to be plotted.
+    - color: The color of the points (default: green).
+    - radius: The radius of the circles to be drawn for each point.
+    - thickness: The thickness of the circle outline.
+
+    Returns:
+    - output_image: The image with the plotted points.
+    """
+    # full_image = np.ones((np.max(points[:, 0]) + 1, np.max(points[:, 1]) + 1, 3), dtype=int)
+    output_image = cv2.cvtColor(np.uint8(image), cv2.COLOR_GRAY2BGR)
+    for (u, v, _) in points.T:
+        # Ensure coordinates are within the image boundaries
+        # if abs(u) > output_image.shape[0] and abs(v) > output_image.shape[1]:
+        #     continue
+        # else:
+        # Draw a circle for each point on the image
+        cv2.circle(output_image, (int(u), int(v)), radius, color, thickness)
+
+    return output_image
 
 def show_stereo_images(left, right, name='Rectified Images'):
     combined_image = np.concatenate((left, right), axis=1)

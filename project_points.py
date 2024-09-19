@@ -179,31 +179,7 @@ def gcs2ccs(xyz_gcs, k, dist, rot, tran):
 
 
 
-def plot_points_on_image(image, points, color=(0, 255, 0), radius=5, thickness=2):
-    """
-    Plot points on an image.
 
-    Parameters:
-    - image: The input image on which points will be plotted.
-    - points: List of (u, v) coordinates to be plotted.
-    - color: The color of the points (default: green).
-    - radius: The radius of the circles to be drawn for each point.
-    - thickness: The thickness of the circle outline.
-
-    Returns:
-    - output_image: The image with the plotted points.
-    """
-    # full_image = np.ones((np.max(points[:, 0]) + 1, np.max(points[:, 1]) + 1, 3), dtype=int)
-    output_image = cv2.cvtColor(np.uint8(image), cv2.COLOR_GRAY2BGR)
-    for (u, v, _) in points.T:
-        # Ensure coordinates are within the image boundaries
-        # if abs(u) > output_image.shape[0] and abs(v) > output_image.shape[1]:
-        #     continue
-        # else:
-        # Draw a circle for each point on the image
-        cv2.circle(output_image, (int(u), int(v)), radius, color, thickness)
-
-    return output_image
 
 
 def read_images(path, images_list, n_images):
@@ -216,7 +192,7 @@ def read_images(path, images_list, n_images):
         images: (height, width, number of images) array of images.
     """
     # Read all images using list comprehension
-    images = [cv2.imread(os.path.join(path, str(img_name)), cv2.IMREAD_GRAYSCALE) for img_name in images_list[0:n_images]]
+    images = [cv2.equalizeHist(cv2.imread(os.path.join(path, str(img_name)), cv2.IMREAD_GRAYSCALE)) for img_name in images_list[0:n_images]]
 
     # Convert list of images to a single 3D NumPy array
     images = np.stack(images, axis=-1).astype(np.uint8)  # Convert to uint8
@@ -225,9 +201,9 @@ def read_images(path, images_list, n_images):
 
 def main():
     # Paths for yaml file and images
-    yaml_file = 'cfg/20240828_bouget.yaml'
-    images_path = '/home/daniel/Insync/daniel.regner@labmetro.ufsc.br/Google Drive - Shared drives/VORIS  - Equipe/Sistema de Medição 3 - Stereo Ativo - Projeção Laser/Imagens/Calibração/SM3-20240828 - calib 10x10'
-    Nimg = 15
+    yaml_file = 'cfg/20240918_bouget.yaml'
+    images_path = '/home/daniel/Insync/daniel.regner@labmetro.ufsc.br/Google Drive - Shared drives/VORIS  - Equipe/Sistema de Medição 3 - Stereo Ativo - Projeção Laser/Imagens/Calibração/SM3-20240918 - calib 10x10'
+    Nimg = 5
     # # Identify all images from path file
     left_images = read_images(os.path.join(images_path, 'left', ),
                               sorted(os.listdir(os.path.join(images_path, 'left'))), n_images=Nimg)
@@ -240,12 +216,12 @@ def main():
 
     # xy_points = points2d_plane(xy=(-300, 300), xy_step=10, visualize=True)
     # xy_points = points3d_cube_z(x_lim=(-50, 50), y_lim=(-50, 50), z_lim=(-20, 20), xy_step=1, z_step=0.5, visualize=True)
-    xy_points = points3d_cube(x_lim=(-100, 250), y_lim=(-50, 250), z_lim=(-1, 1), xy_step=10, z_step=1, visualize=True)
+    xy_points = points3d_cube(x_lim=(70, 100), y_lim=(80, 90), z_lim=(0, 1), xy_step=1, z_step=1, visualize=True)
     uv_points_L = gcs2ccs(xy_points, Kl, Dl, Rl, Tl)
     uv_points_R = gcs2ccs(xy_points, Kr, Dr, Rr, Tr)
-    output_image_L = plot_points_on_image(image=left_images[:, :, 11], points=uv_points_L, color=(0, 255, 0), radius=5,
+    output_image_L = debugger.plot_points_on_image(image=left_images[:, :, 0], points=uv_points_L, color=(0, 255, 0), radius=5,
                                           thickness=2)
-    output_image_R = plot_points_on_image(image=right_images[:, :, 11], points=uv_points_R, color=(0, 255, 0), radius=5,
+    output_image_R = debugger.plot_points_on_image(image=right_images[:, :, 0], points=uv_points_R, color=(0, 255, 0), radius=5,
                                           thickness=2)
 
     debugger.show_stereo_images(output_image_L, output_image_R, "Remaped points")

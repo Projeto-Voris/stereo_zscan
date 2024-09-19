@@ -13,58 +13,7 @@ import project_points
 import cupy as cp
 
 
-def plot_2d_planes(xyz):
-    # Extract X, Y, Z coordinates
-    # Extract X, Y, Z coordinates
-    X = xyz[:, 0]
-    Y = xyz[:, 1]
-    Z = xyz[:, 2]
 
-    # Create a figure with 2 rows and 3 columns for subplots
-    fig, ax = plt.subplots(2, 3, figsize=(18, 10))
-
-    # Plot XY projection
-    ax[0, 0].scatter(X, Y, c='b', marker='o')
-    ax[0, 0].set_xlabel('X')
-    ax[0, 0].set_ylabel('Y')
-    ax[0, 0].set_title('XY Projection')
-    ax[0, 0].grid()
-
-    # Plot XZ projection
-    ax[0, 1].scatter(X, Z, c='r', marker='o')
-    ax[0, 1].set_xlabel('X')
-    ax[0, 1].set_ylabel('Z')
-    ax[0, 1].set_title('XZ Projection')
-    ax[0, 1].grid()
-
-    # Plot YZ projection
-    ax[0, 2].scatter(Y, Z, c='g', marker='o')
-    ax[0, 2].set_xlabel('Y')
-    ax[0, 2].set_ylabel('Z')
-    ax[0, 2].set_title('YZ Projection')
-    ax[0, 2].grid()
-
-    # Plot X distribution
-    ax[1, 0].hist(X, bins=20, color='b', alpha=0.7)
-    ax[1, 0].set_xlabel('X')
-    ax[1, 0].set_ylabel('Frequency')
-    ax[1, 0].set_title('X Distribution')
-
-    # Plot Y distribution
-    ax[1, 1].hist(Y, bins=20, color='r', alpha=0.7)
-    ax[1, 1].set_xlabel('Y')
-    ax[1, 1].set_ylabel('Frequency')
-    ax[1, 1].set_title('Y Distribution')
-
-    # Plot Z distribution
-    ax[1, 2].hist(Z, bins=20, color='g', alpha=0.7)
-    ax[1, 2].set_xlabel('Z')
-    ax[1, 2].set_ylabel('Frequency')
-    ax[1, 2].set_title('Z Distribution')
-
-    # Adjust layout to prevent overlap
-    plt.tight_layout()
-    plt.show()
 
 
 def interpolate_points(images, projected_points, method='linear'):
@@ -123,8 +72,8 @@ def temp_cross_correlation(left_Igray, right_Igray, points_3d):
     return hmax, Imax, ho
 def main():
     # Paths for yaml file and images
-    yaml_file = 'cfg/20240828_bouget.yaml'
-    images_path = '/home/daniel/Insync/daniel.regner@labmetro.ufsc.br/Google Drive - Shared drives/VORIS  - Equipe/Sistema de Medição 3 - Stereo Ativo - Projeção Laser/Imagens/Testes/SM3-20240912 - random noise'
+    yaml_file = 'cfg/20240918_bouget.yaml'
+    images_path = '/home/daniel/Insync/daniel.regner@labmetro.ufsc.br/Google Drive - Shared drives/VORIS  - Equipe/Sistema de Medição 3 - Stereo Ativo - Projeção Laser/Imagens/Testes/SM3-20240919 - noise 4.0'
     Nimg = 20
     t0 = time.time()
     print('Initiate Algorithm with {} images'.format(Nimg))
@@ -143,7 +92,7 @@ def main():
 
 
     # Construct a 3D points (X,Y,Z) based on initial conditions and steps
-    points_3d = project_points.points3d_cube(x_lim=(-10, 10), y_lim=(-10, 10), z_lim=(-500, 500), xy_step=1, z_step=0.1,
+    points_3d = project_points.points3d_cube(x_lim=(80, 100), y_lim=(80, 100), z_lim=(-500, 500), xy_step=1, z_step=0.1,
                                              visualize=False)
     # Project points on Left and right
     uv_points_l = project_points.gcs2ccs(points_3d, Kl, Dl, Rl, Tl)
