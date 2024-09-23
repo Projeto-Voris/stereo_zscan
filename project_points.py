@@ -13,9 +13,6 @@ import rectify_matrix
 import debugger
 
 
-
-
-
 def points3d_cube(x_lim=(-5, 5), y_lim=(-5, 5), z_lim=(0, 5), xy_step=1.0, z_step=1.0, visualize=True):
     """
     Create a 3D space of combination from linear arrays of X Y Z
@@ -32,7 +29,8 @@ def points3d_cube(x_lim=(-5, 5), y_lim=(-5, 5), z_lim=(0, 5), xy_step=1.0, z_ste
     # Create x, y, z linear space
     x_lin = np.arange(x_lim[0], x_lim[1], step=xy_step)
     y_lin = np.arange(y_lim[0], y_lim[1], step=xy_step)
-    z_lin = np.arange(z_lim[0], z_lim[1], step=z_step)
+    z_lin = np.around(np.arange(z_lim[0], z_lim[1], step=z_step), decimals=2)
+
 
     # Combine all variables from x_lin, y_lin and z_lin
     mg1, mg2, mg3 = np.meshgrid(x_lin, y_lin, z_lin, indexing='ij')
@@ -44,6 +42,7 @@ def points3d_cube(x_lim=(-5, 5), y_lim=(-5, 5), z_lim=(0, 5), xy_step=1.0, z_ste
         debugger.plot_3d_points(x=cube_points[:, 0], y=cube_points[:, 1], z=cube_points[:, 2])
 
     return cube_points
+
 
 def points3d_cube_z(x_lim=(-5, 5), y_lim=(-5, 5), z_lim=(0, 5), xy_step=1.0, z_step=1.0, visualize=True):
     """
@@ -73,6 +72,7 @@ def points3d_cube_z(x_lim=(-5, 5), y_lim=(-5, 5), z_lim=(0, 5), xy_step=1.0, z_s
         debugger.plot_3d_points(x=cube_points[:, 0], y=cube_points[:, 1], z=cube_points[:, 2])
 
     return cube_points
+
 
 def points2d_plane(xy=(-5, 5), xy_step=1.0, visualize=True):
     """
@@ -124,29 +124,6 @@ def undistorted_points(norm_points, distortion):
     return np.hstack((np.stack([x_corrected, y_corrected], axis=-1), np.ones((norm_points.shape[0], 1))))
 
 
-def filter_points_in_bounds(projected_points, image_width, image_height):
-    """
-    Filter points projected in bounds of image shape
-    Parameters:
-        projected_points: (N, 2) of (X, Y) projected points
-        image_width: width of image
-        image_height: height of image
-    Returns:
-        filtered_points: (N, 2) of (X, Y) filtered points
-        valid_mask: boolean mask where valid points are True
-    """
-    # Extract u and v coordinates
-    u, v = projected_points[0, :], projected_points[1, :]
-
-    # Create a mask for points within the image boundaries
-    valid_mask = (u >= 0) & (u < image_width) & (v >= 0) & (v < image_height)
-
-    # Filter points using the valid mask
-    filtered_points = projected_points[:, valid_mask]
-
-    # Return the filtered points and the mask for valid indices
-    return filtered_points, valid_mask
-
 def gcs2ccs(xyz_gcs, k, dist, rot, tran):
     """
        Transform Global Coordinate System (GCS) to Camera Coordinate System (CCS).
@@ -178,11 +155,25 @@ def gcs2ccs(xyz_gcs, k, dist, rot, tran):
     return uv_points
 
 
+# def read_images(path, images_list, n_images, debug=False):
+#     images = []
+#     for image_name in images_list[0:n_images]:
+#         img = cv2.imread(os.path.join(path, str(image_name)), 0)
+#         img = cv2.equalizeHist(img)
+#         thresh = cv2.threshold(img, 200, 255, cv2.THRESH_BINARY_INV)[1]
+#         img = cv2.bitwise_and(img, img, mask=thresh)
+#         images.append(img)
+#         if debug:
+#             cv2.namedWindow(str(image_name), cv2.WINDOW_NORMAL)
+#             cv2.resizeWindow(str(image_name), 500, 500)
+#             cv2.imshow(str(image_name), img)
+#             cv2.waitKey(0)
+#             cv2.destroyWindow(str(image_name))
+#     images = np.stack(images, axis=-1).astype(np.uint8)
+#     return images
 
 
-
-
-def read_images(path, images_list, n_images):
+def read_images(path, images_list, n_images, visualize=False):
     """
     Read all images from the specified path and stack them into a single array.
     Parameters:
@@ -192,17 +183,27 @@ def read_images(path, images_list, n_images):
         images: (height, width, number of images) array of images.
     """
     # Read all images using list comprehension
-    images = [cv2.equalizeHist(cv2.imread(os.path.join(path, str(img_name)), cv2.IMREAD_GRAYSCALE)) for img_name in images_list[0:n_images]]
+    clahe = cv2.createCLAHE(clipLimit=5.0, tileGridSize=(8, 8))
+    images = [clahe.apply(cv2.imread(os.path.join(path, str(img_name)), cv2.IMREAD_GRAYSCALE)) for img_name in
+              images_list[0:n_images]]
 
     # Convert list of images to a single 3D NumPy array
     images = np.stack(images, axis=-1).astype(np.uint8)  # Convert to uint8
+    if visualize:
+        for k in range(images.shape[2]):
+            cv2.namedWindow(str(images_list[k]), cv2.WINDOW_NORMAL)
+            cv2.resizeWindow(str(images_list[k]), 500, 500)
+            cv2.imshow(str(images_list[k]), images[:, :, k])
+            cv2.waitKey(0)
+            cv2.destroyWindow(str(images_list[k]))
 
     return images
+
 
 def main():
     # Paths for yaml file and images
     yaml_file = 'cfg/20240918_bouget.yaml'
-    images_path = '/home/daniel/Insync/daniel.regner@labmetro.ufsc.br/Google Drive - Shared drives/VORIS  - Equipe/Sistema de Medição 3 - Stereo Ativo - Projeção Laser/Imagens/Calibração/SM3-20240918 - calib 10x10'
+    images_path = 'images/SM3-20240918 - calib 10x10'
     Nimg = 5
     # # Identify all images from path file
     left_images = read_images(os.path.join(images_path, 'left', ),
@@ -216,14 +217,19 @@ def main():
 
     # xy_points = points2d_plane(xy=(-300, 300), xy_step=10, visualize=True)
     # xy_points = points3d_cube_z(x_lim=(-50, 50), y_lim=(-50, 50), z_lim=(-20, 20), xy_step=1, z_step=0.5, visualize=True)
-    xy_points = points3d_cube(x_lim=(70, 100), y_lim=(80, 90), z_lim=(0, 1), xy_step=1, z_step=1, visualize=True)
+    xy_points = points3d_cube(x_lim=(0, 155), y_lim=(0, 105), z_lim=(-1, 1), xy_step=5, z_step=0.1, visualize=True)
     uv_points_L = gcs2ccs(xy_points, Kl, Dl, Rl, Tl)
     uv_points_R = gcs2ccs(xy_points, Kr, Dr, Rr, Tr)
-    output_image_L = debugger.plot_points_on_image(image=left_images[:, :, 0], points=uv_points_L, color=(0, 255, 0), radius=5,
-                                          thickness=2)
-    output_image_R = debugger.plot_points_on_image(image=right_images[:, :, 0], points=uv_points_R, color=(0, 255, 0), radius=5,
-                                          thickness=2)
-
+    output_image_L = debugger.plot_points_on_image(image=left_images[:, :, 0], points=uv_points_L, color=(0, 255, 0),
+                                                   radius=5,
+                                                   thickness=1)
+    output_image_R = debugger.plot_points_on_image(image=right_images[:, :, 0], points=uv_points_R, color=(0, 255, 0),
+                                                   radius=5,
+                                                   thickness=1)
+    crop_l = debugger.crop_img2proj_points(output_image_L, uv_points_L)
+    crop_r = debugger.crop_img2proj_points(output_image_R, uv_points_R)
+    cv2.imshow('croped r', crop_r)
+    cv2.imshow('croped l', crop_l)
     debugger.show_stereo_images(output_image_L, output_image_R, "Remaped points")
     cv2.waitKey(0)
     # print('wait')

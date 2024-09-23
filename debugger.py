@@ -28,34 +28,7 @@ def plot_3d_image(image):
     ax.set_zlabel('Intensity')
     plt.show()
 
-
-def plot_3d_correl(x, y, z, correl, title='Plot 3D of max correlation points'):
-    """
-    Plot 3D points as scatter points where color is based on Z value
-    Parameters:
-        x: array of x positions
-        y: array of y positions
-        z: array of z positions
-        color: Vector of point intensity grayscale
-    """
-    # Plot the 3D scatter plot
-    fig = plt.figure(figsize=(10, 8))
-    ax = fig.add_subplot(111, projection='3d')
-    ax.title.set_text(title)
-    scatter = ax.scatter(x, y, z, c=correl, cmap='viridis', marker='o')
-    # ax.set_zlim(0, np.max(z))
-    colorbar = plt.colorbar(scatter, ax=ax, shrink=0.5, aspect=5)
-    colorbar.set_label('Correlation Coeficient')
-
-    # Add labels
-    ax.set_xlabel('X [mm]')
-    ax.set_ylabel('Y [mm]')
-    ax.set_zlabel('Z [mm]')
-
-    plt.show()
-
-
-def plot_3d_points(x, y, z, color=None):
+def plot_3d_points(x, y, z, color=None, title='Plot 3D of max correlation points'):
     """
     Plot 3D points as scatter points where color is based on Z value
     Parameters:
@@ -66,12 +39,11 @@ def plot_3d_points(x, y, z, color=None):
     """
     if color is None:
         color = z
-        cmap = 'viridis'
-    else:
-        cmap = 'gray'
-    # Plot the 3D scatter plot
+    cmap = 'viridis'
+# Plot the 3D scatter plot
     fig = plt.figure(figsize=(10, 8))
     ax = fig.add_subplot(111, projection='3d')
+    ax.title.set_text(title)
 
     scatter = ax.scatter(x, y, z, c=color, cmap=cmap, marker='o')
     # ax.set_zlim(0, np.max(z))
@@ -182,6 +154,11 @@ def plot_hist(left, right):
         plt.grid(True)
     plt.show()
 
+def crop_img2proj_points(image, uv_points):
+    u = (int(np.min(uv_points[0,:])), int(np.max(uv_points[0,:])))
+    v = (int(np.min(uv_points[1,:])), int(np.max(uv_points[1,:])))
+    croped_img = image[v[0]:v[1],u[0]:u[1]]
+    return croped_img
 
 def plot_point_correl(xyz, ho):
     z_size = np.unique(xyz[:, 2]).shape[0]
@@ -210,13 +187,8 @@ def plot_points_on_image(image, points, color=(0, 255, 0), radius=5, thickness=2
     # full_image = np.ones((np.max(points[:, 0]) + 1, np.max(points[:, 1]) + 1, 3), dtype=int)
     output_image = cv2.cvtColor(np.uint8(image), cv2.COLOR_GRAY2BGR)
     for (u, v, _) in points.T:
-        # Ensure coordinates are within the image boundaries
-        # if abs(u) > output_image.shape[0] and abs(v) > output_image.shape[1]:
-        #     continue
-        # else:
-        # Draw a circle for each point on the image
+            # Draw a circle for each point on the image
         cv2.circle(output_image, (int(u), int(v)), radius, color, thickness)
-
     return output_image
 
 def show_stereo_images(left, right, name='Rectified Images'):
