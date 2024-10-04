@@ -32,7 +32,7 @@ def interpolate_points(images, projected_points):
         # Create the interpolation function for each image
 
         # Perform interpolation for all projected points
-        inter_Igray[:, n] = map_coordinates(images[:, :, n], projected_points_uv, order=0, mode='constant', cval=0)
+        inter_Igray[:, n] = map_coordinates(images[:, :, n], projected_points_uv, order=1, mode='constant', cval=0)
 
     return inter_Igray
 
@@ -107,20 +107,21 @@ def spearman_correlation(left_Igray, right_Igray, points_3d):
 
 def main():
     # Paths for yaml file and images
-    yaml_file = 'cfg/20240918_bouget.yaml'
-    images_path = 'images/SM3-20240919 - noise 4.0'
-    Nimg = 30
-    DEBUG = False
+    yaml_file = 'cfg/SM4_20241004_bouget.yaml'
+    # images_path = 'images/SM3-20240918 - noise'
+    images_path = 'images/SM4-20241004 - noise'
+    Nimg = 40
+    DEBUG = True
     t0 = time.time()
     print('Initiate Algorithm with {} images'.format(Nimg))
     # Identify all images from path file
     left_images = project_points.read_images(os.path.join(images_path, 'left', ),
                                              sorted(os.listdir(os.path.join(images_path, 'left'))),
-                                             n_images=Nimg, visualize=DEBUG)
+                                             n_images=Nimg, visualize=False)
 
     right_images = project_points.read_images(os.path.join(images_path, 'right', ),
                                               sorted(os.listdir(os.path.join(images_path, 'right'))),
-                                              n_images=Nimg, visualize=DEBUG)
+                                              n_images=Nimg, visualize=False)
 
     t1 = time.time()
     print('Got {} left and right images: \n dt: {} ms'.format(right_images.shape[2] + left_images.shape[2],
@@ -130,8 +131,11 @@ def main():
     Kl, Dl, Rl, Tl, Kr, Dr, Rr, Tr, R, T = rectify_matrix.load_camera_params(yaml_file=yaml_file)
 
     # Construct a 3D points (X,Y,Z) based on initial conditions and steps
-    points_3d = project_points.points3d_cube(x_lim=(0, 155), y_lim=(0, 105), z_lim=(-100, 100), xy_step=5, z_step=0.01,
+    # points_3d = project_points.points3d_cube(x_lim=(0, 155), y_lim=(0, 105), z_lim=(-100, 100), xy_step=50, z_step=0.1,
+    #                                          visualize=False)
+    points_3d = project_points.points3d_cube(x_lim=(0, 50), y_lim=(0, 50), z_lim=(-100, 100), xy_step=50, z_step=0.1,
                                              visualize=False)
+    print(points_3d[:10,:])
     # Project points on Left and right
     uv_points_l = project_points.gcs2ccs(points_3d, Kl, Dl, Rl, Tl)
     uv_points_r = project_points.gcs2ccs(points_3d, Kr, Dr, Rr, Tr)
@@ -158,7 +162,7 @@ def main():
     print("Interpolate \n dt: {} ms".format(round((t4 - t3) * 1e3, 2)))
 
     # Temporal correlation for L and R interpolated points
-    ho, hmax, imax,ho_zstep, hmin, imin = temp_cross_correlation(inter_points_L, inter_points_R, points_3d)
+    ho, hmax, imax, ho_zstep, hmin, imin = temp_cross_correlation(inter_points_L, inter_points_R, points_3d)
     filtered_3d_ho = points_3d[np.asarray(imax, np.int32)]
     filtered_3d_ho_min = points_3d[np.asarray(imin, np.int32)]
     # spearman_correl, sp_max, id_s_max, sp_zstep = spearman_correlation(inter_points_L, inter_points_R,  points_3d)
@@ -181,7 +185,26 @@ def main():
     t6 = time.time()
     print('Ploted 3D points and correlation data \n dt: {} ms'.format(round((t6 - t5) * 1e3, 2)))
     # print("Points max correlation: {}".format(filtered_3d_ho.shape[0]))
+    plt.figure()
+    plt.plot(ho)
+    plt.show()
+    print(np.argmax(ho), ' , ', np.max(ho))
+
+    img_l = cv2.circle(cv2.cvtColor(np.uint8(left_images[:, :, 0]), cv2.COLOR_GRAY2BGR),
+                       (int(uv_points_l[0, np.argmax(ho)]), int(uv_points_l[1, np.argmax(ho)])), 5, (0, 255, 0), 2)
+    img_r = cv2.circle(cv2.cvtColor(np.uint8(right_images[:, :, 0]), cv2.COLOR_GRAY2BGR),
+                       (int(uv_points_r[0, np.argmax(ho)]), int(uv_points_r[1, np.argmax(ho)])), 5, (0, 255, 0), 2)
+    # debugger.show_stereo_images(img_l, img_r)
+
+    cv2.namedWindow('left', cv2.WINDOW_NORMAL)
+    cv2.namedWindow('right', cv2.WINDOW_NORMAL)
+    cv2.resizeWindow('left', 1920, 1080)
+    cv2.resizeWindow('right', 1920, 1080)
+    cv2.imshow('left', img_l)
+    cv2.imshow('right', img_r)
+    cv2.waitKey(0)
     print('wait')
+
     # plot_2d_planes(filtered_3d)
 
 

@@ -170,7 +170,7 @@ def plot_point_correl(xyz, ho):
         plt.title(xyz[x_val * z_size, :])
     plt.show()
 
-def plot_points_on_image(image, points, color=(0, 255, 0), radius=5, thickness=2):
+def plot_points_on_image(image, points, color=(0, 255, 0), radius=5, thickness=1):
     """
     Plot points on an image.
 

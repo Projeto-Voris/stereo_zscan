@@ -184,7 +184,7 @@ def read_images(path, images_list, n_images, visualize=False):
     """
     # Read all images using list comprehension
     clahe = cv2.createCLAHE(clipLimit=5.0, tileGridSize=(8, 8))
-    images = [clahe.apply(cv2.imread(os.path.join(path, str(img_name)), cv2.IMREAD_GRAYSCALE)) for img_name in
+    images = [cv2.imread(os.path.join(path, str(img_name)), cv2.IMREAD_GRAYSCALE) for img_name in
               images_list[0:n_images]]
 
     # Convert list of images to a single 3D NumPy array
@@ -202,8 +202,8 @@ def read_images(path, images_list, n_images, visualize=False):
 
 def main():
     # Paths for yaml file and images
-    yaml_file = 'cfg/20240918_bouget.yaml'
-    images_path = 'images/SM3-20240918 - calib 10x10'
+    yaml_file = 'cfg/SM4_20241004.yaml'
+    images_path = '/home/daniel/Insync/daniel.regner@labmetro.ufsc.br/Google Drive - Shared drives/VORIS  - Equipe/Sistema de Medição 4 - Stereo Projeção Franjas/Imagens/Calibração/20241004 - Calibração padrão 25x25'
     Nimg = 5
     # # Identify all images from path file
     left_images = read_images(os.path.join(images_path, 'left', ),
@@ -211,21 +211,21 @@ def main():
     right_images = read_images(os.path.join(images_path, 'right', ),
                                sorted(os.listdir(os.path.join(images_path, 'right'))), n_images=Nimg)
 
-    # Read file containing all calibration parameters from stereo system
+    # Read file containing all calibration qparameters from stereo system
     Kl, Dl, Rl, Tl, Kr, Dr, Rr, Tr, R, T = rectify_matrix.load_camera_params(yaml_file=yaml_file)
     # xyz_points = z_scan_temporal.points3d_cube(xy=(-1, 1), z=(0, 1), xy_step=0.1, z_step=0.5, visualize=False)
 
     # xy_points = points2d_plane(xy=(-300, 300), xy_step=10, visualize=True)
     # xy_points = points3d_cube_z(x_lim=(-50, 50), y_lim=(-50, 50), z_lim=(-20, 20), xy_step=1, z_step=0.5, visualize=True)
-    xy_points = points3d_cube(x_lim=(0, 155), y_lim=(0, 105), z_lim=(-1, 1), xy_step=5, z_step=0.1, visualize=True)
+    xy_points = points3d_cube(x_lim=(0, 250), y_lim=(0, 125), z_lim=(0, 1), xy_step=25, z_step=1, visualize=False)
     uv_points_L = gcs2ccs(xy_points, Kl, Dl, Rl, Tl)
     uv_points_R = gcs2ccs(xy_points, Kr, Dr, Rr, Tr)
     output_image_L = debugger.plot_points_on_image(image=left_images[:, :, 0], points=uv_points_L, color=(0, 255, 0),
-                                                   radius=5,
-                                                   thickness=1)
+                                                   radius=2,
+                                                   thickness=-1)
     output_image_R = debugger.plot_points_on_image(image=right_images[:, :, 0], points=uv_points_R, color=(0, 255, 0),
-                                                   radius=5,
-                                                   thickness=1)
+                                                   radius=2,
+                                                   thickness=-1)
     crop_l = debugger.crop_img2proj_points(output_image_L, uv_points_L)
     crop_r = debugger.crop_img2proj_points(output_image_R, uv_points_R)
     cv2.imshow('croped r', crop_r)
