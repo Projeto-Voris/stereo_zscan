@@ -8,7 +8,7 @@ import os
 
 from numpy.ma.core import ones_like
 
-import z_scan_temporal
+import z_scan
 import rectify_matrix
 import debugger
 
@@ -30,7 +30,6 @@ def points3d_cube(x_lim=(-5, 5), y_lim=(-5, 5), z_lim=(0, 5), xy_step=1.0, z_ste
     x_lin = np.arange(x_lim[0], x_lim[1], step=xy_step)
     y_lin = np.arange(y_lim[0], y_lim[1], step=xy_step)
     z_lin = np.around(np.arange(z_lim[0], z_lim[1], step=z_step), decimals=2)
-
 
     # Combine all variables from x_lin, y_lin and z_lin
     mg1, mg2, mg3 = np.meshgrid(x_lin, y_lin, z_lin, indexing='ij')
@@ -173,7 +172,7 @@ def gcs2ccs(xyz_gcs, k, dist, rot, tran):
 #     return images
 
 
-def read_images(path, images_list, n_images, visualize=False):
+def read_images(path, images_list, n_images, visualize=False, CLAHE=False):
     """
     Read all images from the specified path and stack them into a single array.
     Parameters:
@@ -183,9 +182,13 @@ def read_images(path, images_list, n_images, visualize=False):
         images: (height, width, number of images) array of images.
     """
     # Read all images using list comprehension
-    clahe = cv2.createCLAHE(clipLimit=5.0, tileGridSize=(8, 8))
-    images = [cv2.imread(os.path.join(path, str(img_name)), cv2.IMREAD_GRAYSCALE) for img_name in
-              images_list[0:n_images]]
+    if CLAHE:
+        clahe = cv2.createCLAHE(clipLimit=5.0, tileGridSize=(8, 8))
+        images = [clahe.apply(cv2.imread(os.path.join(path, str(img_name))), cv2.IMREAD_GRAYSCALE)
+                  for img_name in images_list[0:n_images]]
+    else:
+        images = [cv2.imread(os.path.join(path, str(img_name)), cv2.IMREAD_GRAYSCALE)
+                  for img_name in images_list[0:n_images]]
 
     # Convert list of images to a single 3D NumPy array
     images = np.stack(images, axis=-1).astype(np.uint8)  # Convert to uint8
@@ -203,7 +206,8 @@ def read_images(path, images_list, n_images, visualize=False):
 def main():
     # Paths for yaml file and images
     yaml_file = 'cfg/SM4_20241004.yaml'
-    images_path = '/home/daniel/Insync/daniel.regner@labmetro.ufsc.br/Google Drive - Shared drives/VORIS  - Equipe/Sistema de Medição 4 - Stereo Projeção Franjas/Imagens/Calibração/20241004 - Calibração padrão 25x25'
+    # images_path = 'images/SM4-20241004 -calib 25x25'
+    images_path = 'images/SM4-20241004 -calib 25x25'
     Nimg = 5
     # # Identify all images from path file
     left_images = read_images(os.path.join(images_path, 'left', ),
@@ -215,9 +219,9 @@ def main():
     Kl, Dl, Rl, Tl, Kr, Dr, Rr, Tr, R, T = rectify_matrix.load_camera_params(yaml_file=yaml_file)
     # xyz_points = z_scan_temporal.points3d_cube(xy=(-1, 1), z=(0, 1), xy_step=0.1, z_step=0.5, visualize=False)
 
-    # xy_points = points2d_plane(xy=(-300, 300), xy_step=10, visualize=True)
-    # xy_points = points3d_cube_z(x_lim=(-50, 50), y_lim=(-50, 50), z_lim=(-20, 20), xy_step=1, z_step=0.5, visualize=True)
-    xy_points = points3d_cube(x_lim=(0, 250), y_lim=(0, 125), z_lim=(0, 1), xy_step=25, z_step=1, visualize=False)
+    # xy_points = points3d_cube(x_lim=(0, 250), y_lim=(0, 125), z_lim=(-100,0), xy_step=25, z_step=0.1, visualize=False)
+    xy_points = points3d_cube(x_lim=(-100, 100), y_lim=(-100, 100), z_lim=(10, 20), xy_step=0.5, z_step=0.5,
+                              visualize=False)
     uv_points_L = gcs2ccs(xy_points, Kl, Dl, Rl, Tl)
     uv_points_R = gcs2ccs(xy_points, Kr, Dr, Rr, Tr)
     output_image_L = debugger.plot_points_on_image(image=left_images[:, :, 0], points=uv_points_L, color=(0, 255, 0),
@@ -226,10 +230,11 @@ def main():
     output_image_R = debugger.plot_points_on_image(image=right_images[:, :, 0], points=uv_points_R, color=(0, 255, 0),
                                                    radius=2,
                                                    thickness=-1)
-    crop_l = debugger.crop_img2proj_points(output_image_L, uv_points_L)
-    crop_r = debugger.crop_img2proj_points(output_image_R, uv_points_R)
-    cv2.imshow('croped r', crop_r)
-    cv2.imshow('croped l', crop_l)
+    # crop_l = debugger.crop_img2proj_points(output_image_L, uv_points_L)
+    # crop_r = debugger.crop_img2proj_points(output_image_R, uv_points_R)
+    # cv2.imshow('croped r', crop_r)
+    # cv2.imshow('croped l', crop_l)
+    # cv2.imshow('left', output_image_L)
     debugger.show_stereo_images(output_image_L, output_image_R, "Remaped points")
     cv2.waitKey(0)
     # print('wait')

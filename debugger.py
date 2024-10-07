@@ -1,8 +1,31 @@
+from sys import path_hooks
+
 import cv2
 import numpy as np
 import matplotlib.pyplot as plt
 import os
 
+def save_array_to_csv(array, filename):
+    """
+    Save a 2D NumPy array to a CSV file.
+
+    :param array: 2D numpy array
+    :param filename: Output CSV filename
+    """
+    # Save the 2D array as a CSV file
+    np.savetxt(filename, array, delimiter=',')
+    print(f"Array saved to {filename}")
+
+def load_array_from_csv(filename):
+    """
+    Load a 2D NumPy array from a CSV file.
+
+    :param filename: Input CSV filename
+    :return: 2D numpy array
+    """
+    # Load the array from the CSV file
+    array = np.loadtxt(filename, delimiter=',')
+    return array
 
 def plot_3d_image(image):
     """
@@ -28,6 +51,69 @@ def plot_3d_image(image):
     ax.set_zlabel('Intensity')
     plt.show()
 
+
+def plot_images(left_image, right_image):
+    left_image = cv2.cvtColor(left_image, cv2.COLOR_BGR2RGB)
+    right_image = cv2.cvtColor(right_image, cv2.COLOR_BGR2RGB)
+    fig, (ax1, ax2) = plt.subplots(1,2, figsize=(16, 12))
+
+    ax1.imshow(left_image)
+    ax1.axis('off')
+    ax2.imshow(right_image)
+    ax2.axis('off')
+
+    plt.tight_layout()
+    plt.show()
+
+
+def plot_zscan_phi(phi_map):
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(16, 9))
+    plt.title('Z step for abs(phase_left - phase_right)')
+    for j in range(len(phi_map)):
+        if j < len(phi_map) // 2:
+            ax1.plot(phi_map[j], label="{}".format(j))
+            ax1.set_xlabel('z steps')
+            ax1.set_ylabel('correlation [%]')
+            ax1.grid(True)
+            ax1.legend()
+        if j >= len(phi_map) // 2:
+            ax2.plot(phi_map[j], label="{}".format(j))
+            ax2.set_xlabel('z steps')
+            ax2.set_ylabel('correlation [%]')
+            ax2.grid(True)
+            ax2.legend()
+    # Adjust layout to prevent overlap
+    plt.tight_layout()
+    plt.show()
+
+def plot_zscan(correl_ar, xyz_points, list_of_points=None):
+    z_size = np.unique(xyz_points[:, 2]).shape[0]
+    if list_of_points is None:
+        list_of_points = np.arange(np.unique(xyz_points[:, 0]).shape[0])
+
+        # Create a figure with 2 subplots (1 row, 2 columns)
+        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(16, 9))
+
+        # First graph
+        for k in range(xyz_points.shape[0] // z_size):
+            if k < xyz_points.shape[0] // (2 * z_size):
+                ax1.plot(correl_ar[k * z_size:(k + 1) * z_size], label="{}".format(k))
+                ax1.set_xlabel('z steps')
+                ax1.set_ylabel('correlation [%]')
+                ax1.grid(True)
+                ax1.legend()
+            if k >= xyz_points.shape[0] // (2 * z_size):
+                ax2.plot(correl_ar[k * z_size:(k + 1) * z_size], label="{}".format(k))
+                ax2.set_xlabel('z steps')
+                ax2.set_ylabel('correlation [%]')
+                ax2.grid(True)
+                ax2.legend()
+
+        # Adjust layout to prevent overlap
+        plt.tight_layout()
+        plt.show()
+
+
 def plot_3d_points(x, y, z, color=None, title='Plot 3D of max correlation points'):
     """
     Plot 3D points as scatter points where color is based on Z value
@@ -40,7 +126,7 @@ def plot_3d_points(x, y, z, color=None, title='Plot 3D of max correlation points
     if color is None:
         color = z
     cmap = 'viridis'
-# Plot the 3D scatter plot
+    # Plot the 3D scatter plot
     fig = plt.figure(figsize=(10, 8))
     ax = fig.add_subplot(111, projection='3d')
     ax.title.set_text(title)
@@ -56,6 +142,7 @@ def plot_3d_points(x, y, z, color=None, title='Plot 3D of max correlation points
     ax.set_zlabel('Z [mm]')
 
     plt.show()
+
 
 def plot_2d_planes(xyz):
     # Extract X, Y, Z coordinates
@@ -110,6 +197,7 @@ def plot_2d_planes(xyz):
     plt.tight_layout()
     plt.show()
 
+
 def plot_hist(left, right):
     if left.shape.__len__() != right.shape.__len__():
         print("Images are not colored")
@@ -154,11 +242,13 @@ def plot_hist(left, right):
         plt.grid(True)
     plt.show()
 
+
 def crop_img2proj_points(image, uv_points):
-    u = (int(np.min(uv_points[0,:])), int(np.max(uv_points[0,:])))
-    v = (int(np.min(uv_points[1,:])), int(np.max(uv_points[1,:])))
-    croped_img = image[v[0]:v[1],u[0]:u[1]]
+    u = (int(np.min(uv_points[0, :])), int(np.max(uv_points[0, :])))
+    v = (int(np.min(uv_points[1, :])), int(np.max(uv_points[1, :])))
+    croped_img = image[v[0]:v[1], u[0]:u[1]]
     return croped_img
+
 
 def plot_point_correl(xyz, ho):
     z_size = np.unique(xyz[:, 2]).shape[0]
@@ -169,6 +259,7 @@ def plot_point_correl(xyz, ho):
         plt.grid(True)
         plt.title(xyz[x_val * z_size, :])
     plt.show()
+
 
 def plot_points_on_image(image, points, color=(0, 255, 0), radius=5, thickness=1):
     """
@@ -187,9 +278,10 @@ def plot_points_on_image(image, points, color=(0, 255, 0), radius=5, thickness=1
     # full_image = np.ones((np.max(points[:, 0]) + 1, np.max(points[:, 1]) + 1, 3), dtype=int)
     output_image = cv2.cvtColor(np.uint8(image), cv2.COLOR_GRAY2BGR)
     for (u, v, _) in points.T:
-            # Draw a circle for each point on the image
+        # Draw a circle for each point on the image
         cv2.circle(output_image, (int(u), int(v)), radius, color, thickness)
     return output_image
+
 
 def show_stereo_images(left, right, name='Rectified Images'):
     combined_image = np.concatenate((left, right), axis=1)
