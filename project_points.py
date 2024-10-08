@@ -205,9 +205,9 @@ def read_images(path, images_list, n_images, visualize=False, CLAHE=False):
 
 def main():
     # Paths for yaml file and images
-    yaml_file = 'cfg/SM4_20241004.yaml'
+    yaml_file = 'cfg/SM4_20241004_bianca.yaml'
     # images_path = 'images/SM4-20241004 -calib 25x25'
-    images_path = 'images/SM4-20241004 -calib 25x25'
+    images_path = 'images/SM4-20241004 - noise'
     Nimg = 5
     # # Identify all images from path file
     left_images = read_images(os.path.join(images_path, 'left', ),
@@ -219,9 +219,9 @@ def main():
     Kl, Dl, Rl, Tl, Kr, Dr, Rr, Tr, R, T = rectify_matrix.load_camera_params(yaml_file=yaml_file)
     # xyz_points = z_scan_temporal.points3d_cube(xy=(-1, 1), z=(0, 1), xy_step=0.1, z_step=0.5, visualize=False)
 
-    # xy_points = points3d_cube(x_lim=(0, 250), y_lim=(0, 125), z_lim=(-100,0), xy_step=25, z_step=0.1, visualize=False)
-    xy_points = points3d_cube(x_lim=(-100, 100), y_lim=(-100, 100), z_lim=(10, 20), xy_step=0.5, z_step=0.5,
-                              visualize=False)
+    xy_points = points3d_cube(x_lim=(-250, 500), y_lim=(-150, 400), z_lim=(-0, 1), xy_step=25, z_step=0.1,
+                                             visualize=False)
+
     uv_points_L = gcs2ccs(xy_points, Kl, Dl, Rl, Tl)
     uv_points_R = gcs2ccs(xy_points, Kr, Dr, Rr, Tr)
     output_image_L = debugger.plot_points_on_image(image=left_images[:, :, 0], points=uv_points_L, color=(0, 255, 0),
@@ -230,11 +230,7 @@ def main():
     output_image_R = debugger.plot_points_on_image(image=right_images[:, :, 0], points=uv_points_R, color=(0, 255, 0),
                                                    radius=2,
                                                    thickness=-1)
-    # crop_l = debugger.crop_img2proj_points(output_image_L, uv_points_L)
-    # crop_r = debugger.crop_img2proj_points(output_image_R, uv_points_R)
-    # cv2.imshow('croped r', crop_r)
-    # cv2.imshow('croped l', crop_l)
-    # cv2.imshow('left', output_image_L)
+
     debugger.show_stereo_images(output_image_L, output_image_R, "Remaped points")
     cv2.waitKey(0)
     # print('wait')
