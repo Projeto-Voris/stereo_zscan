@@ -114,13 +114,14 @@ def undistorted_points(norm_points, distortion):
     k1, k2, p1, p2, k3 = distortion
 
     # Radial distortion correction
-    factor = (1 + k1 * r2 + k2 * r2 ** 2 + k3 * r2 ** 3)
-    x_corrected = norm_points[:, 0] * factor + 2 * p1 * norm_points[:, 0] * norm_points[:, 1] + p2 * (
+    factor = (1 + k1 * r2 + k2 * r2 ** 2 + k3 * r2 ** 3) #TODO: Fix radial distortion equation
+
+    x_dist = norm_points[:, 0] * factor + 2 * p1 * norm_points[:, 0] * norm_points[:, 1] + p2 * (
             r2 + 2 * norm_points[:, 0] ** 2)
-    y_corrected = norm_points[:, 1] * factor + p1 * (r2 + 2 * norm_points[:, 1] ** 2) + 2 * p2 * norm_points[:,
+    y_dist = norm_points[:, 1] * factor + p1 * (r2 + 2 * norm_points[:, 1] ** 2) + 2 * p2 * norm_points[:,
                                                                                                  0] * norm_points[:, 1]
     # return with extra columns of ones
-    return np.hstack((np.stack([x_corrected, y_corrected], axis=-1), np.ones((norm_points.shape[0], 1))))
+    return np.hstack((np.stack([x_dist, y_dist], axis=-1), np.ones((norm_points.shape[0], 1))))
 
 
 def gcs2ccs(xyz_gcs, k, dist, rot, tran):
@@ -140,36 +141,21 @@ def gcs2ccs(xyz_gcs, k, dist, rot, tran):
     # rot matrix and trans vector from gcs to ccs
     rt_matrix = np.vstack(
         (np.hstack((rot, tran[:, None])), [0, 0, 0, 1]))
+
     # Multiply rotation and translation matrix to global points [X; Y; Z; 1]
     xyz_ccs = np.dot(rt_matrix, xyz_gcs_1.T)
+
     # Normalize by dividing by Z to get normalized image coordinates
     epsilon = 1e-10  # Small value to prevent division by zero
     xyz_ccs_norm = np.hstack((xyz_ccs[:2, :].T / np.maximum(xyz_ccs[2, :, np.newaxis], epsilon),
                               np.ones((xyz_ccs.shape[1], 1)))).T
-    # remove distortion from lens
-    xyz_ccs_norm_undist = undistorted_points(xyz_ccs_norm.T, dist)
+
+    # introduce distortion from lens
+    xyz_ccs_norm_dist = undistorted_points(xyz_ccs_norm.T, dist)
 
     # Compute image's point as intrinsic K to XYZ CCS points normalized and undistorted
-    uv_points = np.dot(k, xyz_ccs_norm_undist.T)
+    uv_points = np.dot(k, xyz_ccs_norm_dist.T)
     return uv_points
-
-
-# def read_images(path, images_list, n_images, debug=False):
-#     images = []
-#     for image_name in images_list[0:n_images]:
-#         img = cv2.imread(os.path.join(path, str(image_name)), 0)
-#         img = cv2.equalizeHist(img)
-#         thresh = cv2.threshold(img, 200, 255, cv2.THRESH_BINARY_INV)[1]
-#         img = cv2.bitwise_and(img, img, mask=thresh)
-#         images.append(img)
-#         if debug:
-#             cv2.namedWindow(str(image_name), cv2.WINDOW_NORMAL)
-#             cv2.resizeWindow(str(image_name), 500, 500)
-#             cv2.imshow(str(image_name), img)
-#             cv2.waitKey(0)
-#             cv2.destroyWindow(str(image_name))
-#     images = np.stack(images, axis=-1).astype(np.uint8)
-#     return images
 
 
 def read_images(path, images_list, n_images, visualize=False, CLAHE=False):
@@ -205,9 +191,9 @@ def read_images(path, images_list, n_images, visualize=False, CLAHE=False):
 
 def main():
     # Paths for yaml file and images
-    yaml_file = 'cfg/SM4_20241004_bianca.yaml'
+    yaml_file = 'cfg/SM3_20240918_bouget.yaml'
     # images_path = 'images/SM4-20241004 -calib 25x25'
-    images_path = 'images/SM4-20241004 - noise'
+    images_path = '/home/daniel/Insync/daniel.regner@labmetro.ufsc.br/Google Drive - Shared drives/VORIS  - Equipe/Sistema de Medição 3 - Stereo Ativo - Projeção Laser/Imagens/Calibração/SM3-20240918 - calib 10x10'
     Nimg = 5
     # # Identify all images from path file
     left_images = read_images(os.path.join(images_path, 'left', ),
@@ -219,17 +205,17 @@ def main():
     Kl, Dl, Rl, Tl, Kr, Dr, Rr, Tr, R, T = rectify_matrix.load_camera_params(yaml_file=yaml_file)
     # xyz_points = z_scan_temporal.points3d_cube(xy=(-1, 1), z=(0, 1), xy_step=0.1, z_step=0.5, visualize=False)
 
-    xy_points = points3d_cube(x_lim=(-250, 500), y_lim=(-150, 400), z_lim=(-0, 1), xy_step=25, z_step=0.1,
+    xy_points = points3d_cube(x_lim=(-50, 250), y_lim=(-150, 200), z_lim=(-0, 100 ), xy_step=10, z_step=1,
                                              visualize=False)
 
     uv_points_L = gcs2ccs(xy_points, Kl, Dl, Rl, Tl)
     uv_points_R = gcs2ccs(xy_points, Kr, Dr, Rr, Tr)
     output_image_L = debugger.plot_points_on_image(image=left_images[:, :, 0], points=uv_points_L, color=(0, 255, 0),
-                                                   radius=2,
-                                                   thickness=-1)
+                                                   radius=5,
+                                                   thickness=1)
     output_image_R = debugger.plot_points_on_image(image=right_images[:, :, 0], points=uv_points_R, color=(0, 255, 0),
-                                                   radius=2,
-                                                   thickness=-1)
+                                                   radius=5,
+                                                   thickness=1)
 
     debugger.show_stereo_images(output_image_L, output_image_R, "Remaped points")
     cv2.waitKey(0)
