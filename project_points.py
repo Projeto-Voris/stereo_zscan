@@ -1,18 +1,86 @@
-from doctest import debug
-from pickletools import uint8
-
 import cv2
 import matplotlib.pyplot as plt
 import numpy as np
 import os
+import cupy as cp
+import gc
 
-from numpy.ma.core import ones_like
-
-import z_scan
 import rectify_matrix
 import debugger
 
+def points3d_cube_gpu(x_lim=(-5, 5), y_lim=(-5, 5), z_lim=(0, 5), xy_step=1.0, z_step=1.0, visualize=True, max_memory_gb=4):
+    """
+    Create a 3D space of combinations from linear arrays of X, Y, Z on the GPU.
+    Memory usage is limited to the specified max_memory_gb.
 
+    Parameters:
+        x_lim: Tuple (start, end) defining linear space of X
+        y_lim: Tuple (start, end) defining linear space of Y
+        z_lim: Tuple (start, end) defining linear space of Z
+        xy_step: Step size between X and Y
+        z_step: Step size between Z and X
+        visualize: Boolean flag to visualize the 3D space
+        max_memory_gb: Maximum GPU memory to use (in GB)
+
+    Returns:
+        cube_points: Combination of X, Y, and Z
+    """
+
+    # Calculate the size of the arrays
+    x_lin = np.arange(x_lim[0], x_lim[1], step=xy_step)
+    y_lin = np.arange(y_lim[0], y_lim[1], step=xy_step)
+    z_lin = np.around(np.arange(z_lim[0], z_lim[1], step=z_step), decimals=2)
+
+    # Calculate how many points we will have
+    total_points = len(x_lin) * len(y_lin) * len(z_lin)
+    bytes_per_float32 = 4  # 4 bytes per float32 number
+
+    # Estimate the total memory needed for the final cube points (X, Y, Z, each as float32)
+    total_memory_required = total_points * 3 * bytes_per_float32
+
+    # Ensure it fits within max_memory_gb
+    max_bytes = max_memory_gb * 1024**3  # Convert GB to bytes
+
+    # Calculate how many points we can safely store in memory at once
+    if total_memory_required > max_bytes:
+        points_per_batch = int(max_bytes // (3 * bytes_per_float32))
+        print(f"Total memory required exceeds limit. Processing in batches of {points_per_batch} points.")
+    else:
+        points_per_batch = total_points  # Process all at once
+
+    # Initialize an empty list to store results (on the CPU)
+    cube_points_list = []
+
+    # Process points in batches
+    for i in range(0, total_points, points_per_batch):
+        # Create x, y, z linear spaces for the current batch
+        x_batch = x_lin[i % len(x_lin)]
+        y_batch = y_lin[i % len(y_lin)]
+        z_batch = z_lin[i % len(z_lin)]
+
+        # Create meshgrid on the GPU
+        x_gpu = cp.arange(x_lim[0], x_lim[1], step=xy_step)
+        y_gpu = cp.arange(y_lim[0], y_lim[1], step=xy_step)
+        z_gpu = cp.arange(z_lim[0], z_lim[1], step=z_step)
+
+        mg1, mg2, mg3 = cp.meshgrid(x_gpu, y_gpu, z_gpu, indexing='ij')
+
+        # Concatenate vectors to form the cube points and bring back to CPU
+        cube_points_batch = cp.stack([mg1, mg2, mg3], axis=-1).reshape(-1, 3)
+        cube_points_list.append(cp.asnumpy(cube_points_batch))
+
+        # Free GPU memory after processing each batch
+        cp.get_default_memory_pool().free_all_blocks()
+        gc.collect()
+
+    # Combine all batches into a single array on CPU
+    cube_points = np.vstack(cube_points_list)
+
+    # Visualize if required
+    if visualize:
+        debugger.plot_3d_points(x=cube_points[:, 0], y=cube_points[:, 1], z=cube_points[:, 2])
+
+    return cube_points
 def points3d_cube(x_lim=(-5, 5), y_lim=(-5, 5), z_lim=(0, 5), xy_step=1.0, z_step=1.0, visualize=True):
     """
     Create a 3D space of combination from linear arrays of X Y Z
@@ -41,62 +109,6 @@ def points3d_cube(x_lim=(-5, 5), y_lim=(-5, 5), z_lim=(0, 5), xy_step=1.0, z_ste
         debugger.plot_3d_points(x=cube_points[:, 0], y=cube_points[:, 1], z=cube_points[:, 2])
 
     return cube_points
-
-
-def points3d_cube_z(x_lim=(-5, 5), y_lim=(-5, 5), z_lim=(0, 5), xy_step=1.0, z_step=1.0, visualize=True):
-    """
-    Create a 3D space of combination from linear arrays of X Y Z
-    Parameters:
-        x_lim: Begin and end of linear space of X
-        y_lim: Begin and end of linear space of Y
-        z_lim: Begin and end of linear space of Z
-        xy_step: Step size between X and Y
-        z_step: Step size between Z and X
-        visualize: Visualize the 3D space
-    Returns:
-        cube_points: combination of X Y and Z
-    """
-    # Create x, y, z linear space
-    z_lin = np.arange(z_lim[0], z_lim[1], step=z_step)
-    x_lin = np.zeros(z_lin.size)
-    y_lin = np.zeros(z_lin.size)
-
-    # Combine all variables from x_lin, y_lin and z_lin
-    mg1, mg2, mg3 = np.meshgrid(x_lin, y_lin, z_lin, indexing='ij')
-    # Concatenate all vetors
-    cube_points = np.stack([mg1, mg2, mg3], axis=-1).reshape(-1, 3)
-
-    # Visualize space of points
-    if visualize:
-        debugger.plot_3d_points(x=cube_points[:, 0], y=cube_points[:, 1], z=cube_points[:, 2])
-
-    return cube_points
-
-
-def points2d_plane(xy=(-5, 5), xy_step=1.0, visualize=True):
-    """
-    Create a 3D space of combination from linear arrays of X Y
-    Parameters:
-        xy: Begin and end of linear space of X and Y
-        xy_step: Step size between X and Y
-        visualize: Visualize the 3D space
-    Returns:
-        plane_points: combination of X Y from a defined Z
-    """
-    # Create x, y, z linear space
-    x_lin = np.arange(xy[0], xy[1], step=xy_step)
-    y_lin = np.arange(xy[0], xy[1], step=xy_step)
-
-    # Combine all variables from x_lin, y_lin and z_lin
-    mg1, mg2, mg3 = np.meshgrid(x_lin, y_lin, np.ones(x_lin.shape[0]), indexing='ij')
-    # Concatenate all vetors
-    plane_points = np.stack([mg1, mg2, mg3], axis=-1).reshape(-1, 3)
-
-    # Visualize space of points
-    if visualize:
-        debugger.plot_3d_points(x=plane_points[:, 0], y=plane_points[:, 1], z=plane_points[:, 2])
-
-    return plane_points
 
 
 def undistorted_points(norm_points, distortion):
@@ -156,6 +168,152 @@ def gcs2ccs(xyz_gcs, k, dist, rot, tran):
     # Compute image's point as intrinsic K to XYZ CCS points normalized and undistorted
     uv_points = np.dot(k, xyz_ccs_norm_dist.T)
     return uv_points
+
+
+def gcs2ccs_gpu(xyz_gcs, k, dist, rot, tran, max_memory_gb=4):
+    """
+    Transform Global Coordinate System (GCS) to Camera Coordinate System (CCS) on the GPU,
+    while limiting the GPU memory usage.
+
+    Parameters:
+        xyz_gcs (array): Global coordinate system coordinates [X, Y, Z]
+        k: Intrinsic matrix
+        dist: Distortion vector [k1, k2, p1, p2, k3]
+        rot: Rotation matrix
+        tran: Translation vector
+        max_memory_gb: Maximum GPU memory usage in GB (default 4GB)
+
+    Returns:
+        uv_points: Image points (on the GPU, unless converted back to CPU).
+    """
+
+    # Convert all inputs to CuPy arrays for GPU computation
+    xyz_gcs = cp.asarray(xyz_gcs)
+    k = cp.asarray(k)
+    dist = cp.asarray(dist)
+    rot = cp.asarray(rot)
+    tran = cp.asarray(tran)
+
+    # Estimate the size of the input and output arrays
+    num_points = xyz_gcs.shape[0]
+    bytes_per_float32 = 8  # Simulate double-precision float usage
+
+    # Estimate the memory required per point for transformation and intermediate steps
+    memory_per_point = (4 * 3 * bytes_per_float32) + (3 * bytes_per_float32)  # For xyz_gcs_1 and xyz_ccs
+    total_memory_required = num_points * memory_per_point
+
+    # Maximum bytes allowed for memory usage
+    max_bytes = max_memory_gb * 1024**3
+
+    # Adjust the batch size based on memory limitations
+    if total_memory_required > max_bytes:
+        points_per_batch = int((max_bytes // memory_per_point) // 10)  # Reduce batch size more aggressively
+        # print(f"Processing {points_per_batch} points per batch due to memory limitations.")
+    else:
+        points_per_batch = num_points  # Process all points at once
+
+    # Initialize an empty list to store results (on the CPU)
+    uv_points_list = []
+
+    # Process points in batches
+    for i in range(0, num_points, points_per_batch):
+        end = min(i + points_per_batch, num_points)
+        xyz_gcs_batch = xyz_gcs[i:end]
+
+        # Debug: Check the shape of the batch
+        # print(f"Processing batch {i // points_per_batch + 1}, size: {xyz_gcs_batch.shape}")
+
+        # Add one extra line of ones to the global coordinates
+        ones = cp.ones((xyz_gcs_batch.shape[0], 1), dtype=cp.float64)  # Double-precision floats
+        xyz_gcs_1 = cp.hstack((xyz_gcs_batch, ones))
+
+        # Create the rotation and translation matrix
+        rt_matrix = cp.vstack(
+            (cp.hstack((rot, tran[:, None])), cp.array([0, 0, 0, 1], dtype=cp.float64))
+        )
+
+        # Multiply the RT matrix with global points [X; Y; Z; 1]
+        xyz_ccs = cp.dot(rt_matrix, xyz_gcs_1.T)
+        del xyz_gcs_1  # Immediately delete
+
+        # Normalize by dividing by Z to get normalized image coordinates
+        epsilon = 1e-10  # Small value to prevent division by zero
+        xyz_ccs_norm = cp.hstack(
+            (xyz_ccs[:2, :].T / cp.maximum(xyz_ccs[2, :, cp.newaxis], epsilon),
+             cp.ones((xyz_ccs.shape[1], 1), dtype=cp.float64))
+        ).T
+        del xyz_ccs  # Immediately delete
+
+        # Apply distortion using the GPU
+        xyz_ccs_norm_dist = undistorted_points_gpu(xyz_ccs_norm.T, dist)
+        del xyz_ccs_norm  # Free memory
+
+        # Compute image points using the intrinsic matrix K
+        uv_points_batch = cp.dot(k, xyz_ccs_norm_dist.T)
+        del xyz_ccs_norm_dist  # Free memory
+
+        # Debug: Check the shape of the result
+        # print(f"uv_points_batch shape: {uv_points_batch.shape}")
+
+        # Transfer results back to CPU after processing each batch
+        uv_points_list.append(cp.asnumpy(uv_points_batch))
+
+        # Free GPU memory after processing each batch
+        cp.get_default_memory_pool().free_all_blocks()
+        gc.collect()
+
+    # Ensure consistent dimensions when concatenating batches
+    try:
+        # Concatenate all batches along axis 0 (rows)
+        uv_points = np.hstack(uv_points_list)  # Use np.hstack for matching shapes
+
+    except ValueError as e:
+        print(f"Error during concatenation: {e}")
+        raise
+
+    return uv_points
+
+
+def undistorted_points_gpu(points, dist):
+    """
+    GPU version of the undistorted points function using CuPy.
+    Applies radial and tangential distortion.
+
+    Parameters:
+        points: 2D array of normalized image coordinates [x, y].
+        dist: Distortion coefficients [k1, k2, p1, p2, k3].
+
+    Returns:
+        Distorted points on the GPU.
+    """
+    # Extract distortion coefficients
+    k1, k2, p1, p2, k3 = dist
+
+    # Split points into x and y coordinates
+    x, y = points[:, 0], points[:, 1]
+
+    # Calculate r^2 (squared distance from the origin)
+    r2 = x**2 + y**2
+
+    # Radial distortion
+    radial = 1 + k1 * r2 + k2 * r2**2 + k3 * r2**3
+
+    # Tangential distortion
+    x_tangential = 2 * p1 * x * y + p2 * (r2 + 2 * x**2)
+    y_tangential = p1 * (r2 + 2 * y**2) + 2 * p2 * x * y
+
+    # Compute distorted coordinates
+    x_distorted = x * radial + x_tangential
+    y_distorted = y * radial + y_tangential
+
+    # Stack the distorted points
+    distorted_points = cp.vstack([x_distorted, y_distorted, cp.ones_like(x)]).T
+
+    # Clean up intermediate variables to free memory
+    del x, y, r2, radial, x_tangential, y_tangential
+    cp.get_default_memory_pool().free_all_blocks()
+
+    return distorted_points
 
 
 def read_images(path, images_list, n_images, visualize=False, CLAHE=False):
