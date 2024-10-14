@@ -224,12 +224,12 @@ def gcs2ccs_gpu(xyz_gcs, k, dist, rot, tran, max_memory_gb=4):
         # print(f"Processing batch {i // points_per_batch + 1}, size: {xyz_gcs_batch.shape}")
 
         # Add one extra line of ones to the global coordinates
-        ones = cp.ones((xyz_gcs_batch.shape[0], 1), dtype=cp.float64)  # Double-precision floats
+        ones = cp.ones((xyz_gcs_batch.shape[0], 1), dtype=cp.float16)  # Double-precision floats
         xyz_gcs_1 = cp.hstack((xyz_gcs_batch, ones))
 
         # Create the rotation and translation matrix
         rt_matrix = cp.vstack(
-            (cp.hstack((rot, tran[:, None])), cp.array([0, 0, 0, 1], dtype=cp.float64))
+            (cp.hstack((rot, tran[:, None])), cp.array([0, 0, 0, 1], dtype=cp.float16))
         )
 
         # Multiply the RT matrix with global points [X; Y; Z; 1]
@@ -240,7 +240,7 @@ def gcs2ccs_gpu(xyz_gcs, k, dist, rot, tran, max_memory_gb=4):
         epsilon = 1e-10  # Small value to prevent division by zero
         xyz_ccs_norm = cp.hstack(
             (xyz_ccs[:2, :].T / cp.maximum(xyz_ccs[2, :, cp.newaxis], epsilon),
-             cp.ones((xyz_ccs.shape[1], 1), dtype=cp.float64))
+             cp.ones((xyz_ccs.shape[1], 1), dtype=cp.float16))
         ).T
         del xyz_ccs  # Immediately delete
 

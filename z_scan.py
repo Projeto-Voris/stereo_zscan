@@ -32,31 +32,33 @@ def bi_interpolation_gpu(images, uv_points, max_memory_gb=3):
         images = images[:, :, cp.newaxis]
 
     height, width, num_images = images.shape
-    N = uv_points.shape[1]
+    num_points = uv_points.shape[1]
 
-    # Calculate max bytes we can use
+    # Estimate memory usage per point
+    bytes_per_float32 = 8
+    memory_per_point = (4 * num_images * bytes_per_float32)
+    # For left_Igray, right_Igray, and intermediate calculations
+    total_memory_required = num_points * memory_per_point
+
+    # Maximum bytes allowed for memory usage
     max_bytes = max_memory_gb * 1024 ** 3
 
-    def estimate_memory_for_batch(batch_size):
-        bytes_per_float32 = 8
-        memory_for_images = height * width * bytes_per_float32  # Only one image at a time
-        memory_for_uv = batch_size * 2 * bytes_per_float32
-        intermediate_memory = 4 * batch_size * bytes_per_float32  # For p11, p12, etc.
-        return memory_for_images + memory_for_uv + intermediate_memory
-
-    batch_size = N
-    while estimate_memory_for_batch(batch_size) > max_bytes:
-        batch_size //= 2
+    # Adjust the batch size based on memory limitations
+    if total_memory_required > max_bytes:
+        points_per_batch = int(max_bytes // memory_per_point // 100)
+        # print(f"Processing {points_per_batch} points per batch due to memory limitations.")
+    else:
+        points_per_batch = num_points  # Process all points at once
 
     # print(f"Batch size adjusted to: {batch_size} to fit within {max_memory_gb}GB GPU memory limit.")
 
     # Initialize output arrays on CPU to accumulate results
-    interpolated_cpu = np.zeros((N, num_images), dtype=np.float32)
-    std_cpu = np.zeros((N, num_images), dtype=np.float32)
+    interpolated_cpu = np.empty((num_points, num_images), dtype=np.float16)
+    std_cpu = np.empty((num_points, num_images), dtype=np.float16)
 
     # Process points in batches
-    for i in range(0, N, batch_size):
-        end = min(i + batch_size, N)
+    for i in range(0, num_points, points_per_batch):
+        end = min(i + points_per_batch, num_points)
         uv_batch = uv_points[:, i:end]
 
         x = uv_batch[0].astype(cp.int32)
@@ -99,7 +101,6 @@ def bi_interpolation_gpu(images, uv_points, max_memory_gb=3):
         std_cpu = std_cpu[:, 0]
 
     return interpolated_cpu, std_cpu
-
 
 def bi_interpolation(images, uv_points, batch_size=10000):
     """
@@ -242,6 +243,7 @@ def temp_cross_correlation(left_Igray, right_Igray, points_3d):
 
     return ho, hmax, Imax, ho_ztep
 
+
 def temp_cross_correlation_gpu(left_Igray, right_Igray, points_3d, max_memory_gb=3):
     """
     Calculate the cross-correlation between two sets of images over time using CuPy for GPU acceleration,
@@ -260,10 +262,6 @@ def temp_cross_correlation_gpu(left_Igray, right_Igray, points_3d, max_memory_gb
     ho_ztep: List of correlation values for all Z value of each XY.
     """
 
-    # Convert images to CuPy arrays for GPU computation
-    left_Igray = cp.asarray(left_Igray, dtype=cp.float32)
-    right_Igray = cp.asarray(right_Igray, dtype=cp.float32)
-
     num_images = left_Igray.shape[1]  # Number of images
     num_points = left_Igray.shape[0]  # Number of points
 
@@ -273,11 +271,12 @@ def temp_cross_correlation_gpu(left_Igray, right_Igray, points_3d, max_memory_gb
 
     # Estimate memory usage per point
     bytes_per_float32 = 8
-    memory_per_point = (2 * num_images * bytes_per_float32)  # For left_Igray, right_Igray, and intermediate calculations
+    memory_per_point = (4 * num_images * bytes_per_float32)
+    # For left_Igray, right_Igray, and intermediate calculations
     total_memory_required = num_points * memory_per_point
 
     # Maximum bytes allowed for memory usage
-    max_bytes = max_memory_gb * 1024**3
+    max_bytes = max_memory_gb * 1024 ** 3
 
     # Adjust the batch size based on memory limitations
     if total_memory_required > max_bytes:
@@ -288,8 +287,6 @@ def temp_cross_correlation_gpu(left_Igray, right_Igray, points_3d, max_memory_gb
 
     # Initialize outputs with the correct data type (float32 for memory efficiency)
     ho = cp.empty(num_points, dtype=cp.float32)
-    hmax = cp.empty(num_pairs, dtype=cp.float32)
-    Imax = cp.empty(num_pairs, dtype=cp.int64)
 
     # Preallocate ho_ztep only if necessary
     ho_ztep = cp.empty((z_size, num_pairs), dtype=cp.float32)  # Store values for each Z value tested per XY pair
@@ -297,9 +294,10 @@ def temp_cross_correlation_gpu(left_Igray, right_Igray, points_3d, max_memory_gb
     # Process images in chunks based on the adjusted points_per_batch size
     for i in range(0, num_points, points_per_batch):
         end = min(i + points_per_batch, num_points)
-        batch_left = left_Igray[i:end]
-        batch_right = right_Igray[i:end]
-        batch_size = batch_left.shape[0]
+
+        # Load only the current batch into the GPU
+        batch_left = cp.asarray(left_Igray[i:end], dtype=cp.float32)
+        batch_right = cp.asarray(right_Igray[i:end], dtype=cp.float32)
 
         # Debug: Check the batch size
         # print(f"Processing batch {i // points_per_batch + 1}, size: {batch_size}")
@@ -319,25 +317,23 @@ def temp_cross_correlation_gpu(left_Igray, right_Igray, points_3d, max_memory_gb
         # Store the results for this batch
         ho[i:end] = ho_batch
 
-        # Calculate hmax and Imax for this batch
-        for k in range(batch_size // z_size):
-            batch_start_idx = k * z_size
-            batch_end_idx = (k + 1) * z_size
-            ho_range = ho_batch[batch_start_idx:batch_end_idx]
-
-            hmax[i // z_size + k] = cp.nanmax(ho_range)
-            Imax[i // z_size + k] = cp.nanargmax(ho_range) + i
-
         # Release memory after processing each batch
         del batch_left, batch_right, left_mean_batch, right_mean_batch, ho_batch
         cp.get_default_memory_pool().free_all_blocks()
         gc.collect()
 
-    # Handle the case where the last batch is smaller than others
-    # print(f"Handling final batch (size: {batch_size}) to avoid dimension mismatch.")
-    # No need for padding as we're concatenating batch-wise
+    hmax = cp.empty(num_pairs, dtype=cp.float32)
+    Imax = cp.empty(num_pairs, dtype=cp.int64)
+    # Calculate hmax and Imax for this batch
+    for k in range(points_3d.shape[0] // z_size):
+        start_idx = k * z_size
+        end_idx = (k + 1) * z_size
+        ho_range = ho[start_idx:end_idx]
 
-    return cp.asnumpy(ho), cp.asnumpy(hmax), cp.asnumpy(Imax), cp.asnumpy(ho_ztep)
+        hmax[k] = cp.nanmax(ho_range)
+        Imax[k] = cp.nanargmax(ho_range) + k * z_size
+
+    return ho, hmax, Imax, ho_ztep
 
 
 def phase_map(left_Igray, right_Igray, points_3d):
@@ -354,7 +350,7 @@ def phase_map(left_Igray, right_Igray, points_3d):
     return phi_map, phi_min, phi_min_id
 
 
-def fringe_masks(image, uv_l, uv_r, std_l, std_r, phi_id, min_thresh, max_thresh):
+def fringe_masks(image, uv_l, uv_r, std_l, std_r, phi_id, min_thresh=0, max_thresh=1):
     valid_u_l = (uv_l[0, :] >= 0) & (uv_l[0, :] < image.shape[1])
     valid_v_l = (uv_l[1, :] >= 0) & (uv_l[1, :] < image.shape[0])
     valid_u_r = (uv_r[0, :] >= 0) & (uv_r[0, :] < image.shape[1])
@@ -362,7 +358,10 @@ def fringe_masks(image, uv_l, uv_r, std_l, std_r, phi_id, min_thresh, max_thresh
     valid_uv = valid_u_l & valid_u_r & valid_v_l & valid_v_r
     phi_mask = np.zeros(uv_l.shape[1], dtype=bool)
     phi_mask[phi_id] = True
-    valid_std = (min_thresh < std_l < max_thresh) & (min_thresh < std_r < max_thresh)
+    valid_l = (min_thresh < std_l) & (std_l < max_thresh)
+    valid_r = (min_thresh < std_r) & (std_r < max_thresh)
+
+    valid_std = valid_r & valid_l
 
     return valid_uv & valid_std & phi_mask
 
@@ -421,21 +420,12 @@ def correl_zscan(points_3d, yaml_file, images_path, Nimg, output='Correl_pts', D
 
     # Temporal correlation for L and R interpolated points
     ho, hmax, imax, ho_zstep = temp_cross_correlation_gpu(inter_points_L, inter_points_R, points_3d)
-    # filter_mask = correl_mask(image=left_images, uv_l=uv_points_l, uv_r=uv_points_r,
-    #                           std_l=std_interp_L, std_r=std_interp_R, hmax=hmax)
 
-    # mask_3d = points_3d[filter_mask]
     t5 = time.time()
     print("Cross Correlation \n dt: {} s".format(round((t5 - t4), 2)))
 
-    # Temporal correlation for L and R interpolated points
-    # ho, hmax, imax, ho_zstep = temp_cross_correlation(inter_points_L, inter_points_R, points_3d)
-    # filter_mask = correl_mask(image=left_images, uv_l=uv_points_l, uv_r=uv_points_r,
-    #                           std_l=std_interp_L, std_r=std_interp_R, hmax=hmax)
 
-    # mask_3d = points_3d[filter_mask]
-    print("Cross Correlation \n dt: {} s".format(round((time.time() - t5), 2)))
-    filtered_3d_ho = points_3d[np.asarray(imax[hmax > 0.95], np.int32)]
+    filtered_3d_ho = points_3d[cp.asnumpy(imax[hmax > 0.95]).astype(np.int32)]
 
     t6 = time.time()
     print('Ploted 3D points and correlation data \n dt: {} s'.format(round((t6 - t5), 2)))
@@ -453,7 +443,7 @@ def correl_zscan(points_3d, yaml_file, images_path, Nimg, output='Correl_pts', D
     print('Total time: {} s'.format(round(time.time() - t0, 2)))
 
     debugger.plot_3d_points(filtered_3d_ho[:, 0], filtered_3d_ho[:, 1], filtered_3d_ho[:, 2],
-                            color=hmax[hmax > 0.95],
+                            color=cp.asnumpy(hmax[hmax > 0.95].astype(np.float32)),
                             title="Pearson Correl total for {} images from {}".format(Nimg, output))
     # debugger.plot_3d_points(mask_3d[:, 0], mask_3d[:, 1], mask_3d[:, 2], color=None,
     #                     title="Mask filter for {} images".format(Nimg))
@@ -498,12 +488,12 @@ def fringe_zscan(points_3d, yaml_file, image_name, output='fringe_points', DEBUG
     print("Interpolate \n dt: {} s".format(round((t4 - t3), 2)))
 
     phi_map, phi_min, phi_min_id = phase_map(inter_points_L, inter_points_R, points_3d)
-    # fringe_mask = fringe_masks(image=left_images, uv_l=uv_points_l, uv_r=uv_points_r,
-    #                            std_l=std_interp_L, std_r=std_interp_R, phi_id=phi_min_id)
+    fringe_mask = fringe_masks(image=left_images, uv_l=uv_points_l, uv_r=uv_points_r,
+                               std_l=std_interp_L, std_r=std_interp_R, phi_id=phi_min_id)
     t5 = time.time()
     print("Phase map \n dt: {} s".format(round((t5 - t3), 2)))
     filtered_3d_phi = points_3d[np.asarray(phi_min_id, np.int32)]
-    # filtered_mask = points_3d[fringe_mask]
+    filtered_mask = points_3d[fringe_mask]
     if DEBUG:
         debugger.plot_zscan_phi(phi_map=phi_map)
 
@@ -521,23 +511,22 @@ def fringe_zscan(points_3d, yaml_file, image_name, output='fringe_points', DEBUG
 
     debugger.plot_3d_points(filtered_3d_phi[:, 0], filtered_3d_phi[:, 1], filtered_3d_phi[:, 2], color=None,
                             title="Point Cloud of min phase diff - {} px per fringe".format(output))
-    # debugger.plot_3d_points(filtered_mask[:, 0], filtered_mask[:, 1], filtered_mask[:, 2], color=None,
-    #                     title="Fringe Mask")
+    debugger.plot_3d_points(filtered_mask[:, 0], filtered_mask[:, 1], filtered_mask[:, 2], color=None,
+                        title="Fringe Mask")
 
 
 def main():
     yaml_file_SM4 = 'cfg/SM4_20241004_bianca.yaml'
     images_path_SM4 = 'images/SM4-20241004 - noise'  # sm4
     yaml_file_SM3 = 'cfg/SM3_20240918_bouget.yaml'
-    # images_path_SM3 = 'images/SM3-20240918 - noise'
-    images_path_SM3 = '/home/daniel/Insync/daniel.regner@labmetro.ufsc.br/Google Drive - Shared drives/VORIS  - Equipe/Sistema de Medição 3 - Stereo Ativo - Projeção Laser/Imagens/Testes/SM3-20240828 - GC (f50)'
+    images_path_SM3 = 'images/SM3-20240918 - noise'
+    # images_path_SM3 = '/home/daniel/Insync/daniel.regner@labmetro.ufsc.br/Google Drive - Shared drives/VORIS  - Equipe/Sistema de Medição 3 - Stereo Ativo - Projeção Laser/Imagens/Testes/SM3-20240828 - GC (f50)'
     fringe_image_name = '016.csv'
 
     t0 = time.time()
-    points_3d_SM4 = project_points.points3d_cube(x_lim=(-50, 250), y_lim=(-150, 200), z_lim=(-100, 300),
+    points_3d_SM4 = project_points.points3d_cube(x_lim=(-50, 250), y_lim=(-150, 200), z_lim=(-100, 200),
                                                  xy_step=2, z_step=0.1, visualize=False)  # pontos para SM4
-    t1 = time.time()
-    print('Time for 3d points {} dt'.format(round((t1 - t0), 2)))
+    print('Time for 3d points \n {} dt'.format(round((time.time() - t0), 2)))
     # points_3d_SM4 = project_points.points3d_cube_gpu(x_lim=(-50, 250), y_lim=(-150, 200), z_lim=(-100, 300),
     #                                              xy_step=2, z_step=0.1, visualize=False)  # pontos para SM4
     #
@@ -546,11 +535,11 @@ def main():
     points_3d_SM3 = project_points.points3d_cube(x_lim=(-250, 300), y_lim=(-250, 250), z_lim=(-100, 100),
                                                  xy_step=5, z_step=0.1, visualize=False)  # pontos para SM3
 
-    # fringe_zscan(points_3d=points_3d_SM4, yaml_file=yaml_file_SM4, image_name=fringe_image_name,
-    #              output=fringe_image_name.split('.')[0], DEBUG=False, SAVE=False)
-    #
-    correl_zscan(points_3d_SM4, yaml_file=yaml_file_SM4, images_path=images_path_SM4, Nimg=20,
-                 output=images_path_SM3.split('/')[-1], DEBUG=False, SAVE=False)
+    fringe_zscan(points_3d=points_3d_SM4, yaml_file=yaml_file_SM4, image_name=fringe_image_name,
+                 output=os.path.join('output', fringe_image_name.split('.')[0]), DEBUG=False, SAVE=False)
+
+    # correl_zscan(points_3d_SM4, yaml_file=yaml_file_SM4, images_path=images_path_SM4, Nimg=20,
+    #              output=os.path.join('output', images_path_SM4.split('/')[-1]), DEBUG=False, SAVE=False)
 
 
 if __name__ == '__main__':
