@@ -102,6 +102,7 @@ def bi_interpolation_gpu(images, uv_points, max_memory_gb=3):
 
     return interpolated_cpu, std_cpu
 
+
 def bi_interpolation(images, uv_points, batch_size=10000):
     """
     Perform bilinear interpolation on a stack of images at specified uv_points, optimized for memory.
@@ -335,6 +336,191 @@ def temp_cross_correlation_gpu(left_Igray, right_Igray, points_3d, max_memory_gb
 
     return ho, hmax, Imax, ho_ztep
 
+def spatial_correlation_gpu(images_left, images_right, uv_points_l, uv_points_r, window_size=3, max_memory_gb=3):
+    """
+     Optimized GPU-accelerated computation of spatial correlation with limited GPU memory usage.
+
+     Parameters:
+     images_left: (height, width, num_images) array of the left image stack (on GPU).
+     images_right: (height, width, num_images) array of the right image stack (on GPU).
+     uv_points_l: (2, N) array of UV points for the left image (on GPU).
+     uv_points_r: (2, N) array of UV points for the right image (on GPU).
+     window_size: Size of the patch window around each point (default is 3).
+     max_memory_gb: Maximum GPU memory usage in GB.
+
+     Returns:
+     spatial_corr: (N,) array of spatial correlation values for each point across all images.
+     """
+    half_window = window_size // 2
+    height, width, num_images = images_left.shape
+    num_points = uv_points_l.shape[1]
+
+    # Estimate memory usage per point
+    bytes_per_float32 = 4
+    memory_per_point = (2 * window_size * window_size * num_images * bytes_per_float32)  # For left and right patches
+    total_memory_required = num_points * memory_per_point
+
+    # Maximum allowed memory in bytes
+    max_bytes = max_memory_gb * 1024 ** 3
+
+    # Adjust the batch size based on memory limitations
+    if total_memory_required > max_bytes:
+        points_per_batch = int(max_bytes // memory_per_point)
+    else:
+        points_per_batch = num_points
+
+    # Allocate space for the result on GPU
+    spatial_corr = cp.zeros(num_points, dtype=cp.float32)
+
+    # Process points in larger batches
+    for i in range(0, num_points, points_per_batch):
+        end_idx = min(i + points_per_batch, num_points)
+        uv_batch_l = uv_points_l[:, i:end_idx]
+        uv_batch_r = uv_points_r[:, i:end_idx]
+
+        # Process each batch
+        batch_size = uv_batch_l.shape[1]
+        for j in range(batch_size):
+            x_l, y_l = uv_batch_l[:2, j].astype(cp.int32)
+            x_r, y_r = uv_batch_r[:2, j].astype(cp.int32)
+
+            # Ensure the window stays within bounds for left and right UV points
+            x1_l, x2_l = cp.clip(x_l - half_window, 0, width), cp.clip(x_l + half_window + 1, 0, width)
+            y1_l, y2_l = cp.clip(y_l - half_window, 0, height), cp.clip(y_l + half_window + 1, 0, height)
+
+            x1_r, x2_r = cp.clip(x_r - half_window, 0, width), cp.clip(x_r + half_window + 1, 0, width)
+            y1_r, y2_r = cp.clip(y_r - half_window, 0, height), cp.clip(y_r + half_window + 1, 0, height)
+
+            # Check if any patch is empty
+            if (x2_l - x1_l == 0) or (y2_l - y1_l == 0) or (x2_r - x1_r == 0) or (y2_r - y1_r == 0):
+                continue  # Skip this point if any patch is invalid
+
+            # Extract patches for left and right images across all images at once
+            patch_left = images_left[y1_l:y2_l, x1_l:x2_l, :].astype(cp.float32)
+            patch_right = images_right[y1_r:y2_r, x1_r:x2_r, :].astype(cp.float32)
+
+            # Vectorized mean subtraction (on GPU)
+            mean_left = cp.mean(patch_left, axis=(0, 1), keepdims=True)
+            mean_right = cp.mean(patch_right, axis=(0, 1), keepdims=True)
+
+            patch_left -= mean_left
+            patch_right -= mean_right
+
+            # Compute numerator and denominator using vectorized operations (on GPU)
+            num = cp.sum(patch_left * patch_right, axis=(0, 1))
+            den_left = cp.sum(patch_left ** 2, axis=(0, 1))
+            den_right = cp.sum(patch_right ** 2, axis=(0, 1))
+
+            # Sum over images for the final numerator and denominator
+            num_total = cp.sum(num)
+            den_total = cp.sqrt(cp.sum(den_left) * cp.sum(den_right))
+
+            # Final spatial correlation for this point
+            spatial_corr[i + j] = num_total / (den_total + 1e-10)  # Avoid division by zero
+
+        # Free GPU memory less frequently
+        if i % (points_per_batch * 10) == 0:  # Free memory every 10 batches
+            cp.get_default_memory_pool().free_all_blocks()
+
+    return spatial_corr
+
+
+def spatial_correlation(images_left, images_right, uv_points_l, uv_points_r, window_size=3):
+    """
+    Optimized computation of spatial correlation for patches around specified points across all images at once.
+
+    Parameters:
+    images_left: (height, width, num_images) array of the left image stack.
+    images_right: (height, width, num_images) array of the right image stack.
+    uv_points_l: (2, N) array of UV points for the left image.
+    uv_points_r: (2, N) array of UV points for the right image.
+    window_size: Size of the patch window around each point (default is 3).
+
+    Returns:
+    spatial_corr: (N,) array of spatial correlation values for each point across all images.
+    """
+    half_window = window_size // 2
+    height, width, num_images = images_left.shape
+    num_points = uv_points_l.shape[1]
+
+    spatial_corr = np.zeros(num_points)
+
+    for i in range(num_points):
+        x_l, y_l = uv_points_l[:2, i].astype(np.int32)
+        x_r, y_r = uv_points_r[:2, i].astype(np.int32)
+
+        # Ensure the window stays within bounds for left and right UV points
+        x1_l, x2_l = max(0, x_l - half_window), min(width, x_l + half_window + 1)
+        y1_l, y2_l = max(0, y_l - half_window), min(height, y_l + half_window + 1)
+
+        x1_r, x2_r = max(0, x_r - half_window), min(width, x_r + half_window + 1)
+        y1_r, y2_r = max(0, y_r - half_window), min(height, y_r + half_window + 1)
+
+        # Check if any patch is empty
+        if (x2_l - x1_l == 0) or (y2_l - y1_l == 0) or (x2_r - x1_r == 0) or (y2_r - y1_r == 0):
+            continue  # Skip this point if any patch is invalid
+
+        # Extract patches for left and right images across all images at once and cast to float32
+        patch_left = images_left[y1_l:y2_l, x1_l:x2_l, :].astype(
+            np.float32)  # Shape: (patch_height, patch_width, num_images)
+        patch_right = images_right[y1_r:y2_r, x1_r:x2_r, :].astype(
+            np.float32)  # Shape: (patch_height, patch_width, num_images)
+
+        # Vectorized mean subtraction
+        mean_left = np.mean(patch_left, axis=(0, 1), keepdims=True)
+        mean_right = np.mean(patch_right, axis=(0, 1), keepdims=True)
+
+        patch_left -= mean_left  # Broadcasting to subtract mean for each image
+        patch_right -= mean_right
+
+        # Compute numerator and denominator using vectorized operations
+        num = np.sum(patch_left * patch_right, axis=(0, 1))  # Sum over patch dimensions for each image
+        den_left = np.sum(patch_left ** 2, axis=(0, 1))
+        den_right = np.sum(patch_right ** 2, axis=(0, 1))
+
+        # Sum over images for the final numerator and denominator
+        num_total = np.sum(num)
+        den_total = np.sqrt(np.sum(den_left) * np.sum(den_right))
+
+        # Final spatial correlation for this point
+        spatial_corr[i] = num_total / (den_total + 1e-10)  # Avoid division by zero
+
+    return spatial_corr
+
+
+def fuse_correlations(spatial_corr, temporal_corr, points_3d, alpha=0.5, beta=0.5):
+    """
+    Fuse spatial and temporal correlations using a weighted sum.
+
+    Parameters:
+    spatial_corr: (N, num_images) array of spatial correlation values for each point across images.
+    temporal_corr: (N,) array of temporal correlation values for each point.
+    alpha: Weight for spatial correlation.
+    beta: Weight for temporal correlation.
+
+    Returns:
+    fused_corr: (N,) array of fused correlation values for each point.
+    """
+    # Normalize spatial correlations (optional)
+    spatial_corr_norm = spatial_corr / (np.max(spatial_corr) + 1e-10)
+
+    # Normalize temporal correlation (optional)
+    temporal_corr_norm = temporal_corr / (np.max(temporal_corr) + 1e-10)
+
+    # Combine the correlations using a weighted sum
+    fused_corr = alpha * spatial_corr_norm + beta * temporal_corr_norm  # Reshape for broadcasting
+
+    z_step = np.unique(points_3d[:, 2]).shape[0]
+
+    correl_max = []
+    correl_id = []
+    for k in range(points_3d.shape[0] // z_step):
+        correl_range = fused_corr[k * z_step:(k + 1) * z_step]
+        correl_max.append(np.nanmax(correl_range))
+        correl_id.append(np.nanargmax(correl_range) + k * z_step)
+
+    return fused_corr, correl_max, correl_id
+
 
 def phase_map(left_Igray, right_Igray, points_3d):
     z_step = np.unique(points_3d[:, 2]).shape[0]
@@ -416,14 +602,23 @@ def correl_zscan(points_3d, yaml_file, images_path, Nimg, output='Correl_pts', D
     inter_points_R, std_interp_R = bi_interpolation_gpu(right_images, uv_points_r)
 
     t4 = time.time()
-    print("Interpolate GPU \n dt: {} s".format(round((t4 - t3), 2)))
+    print("Interpolate \n dt: {} s".format(round((t4 - t3), 2)))
 
     # Temporal correlation for L and R interpolated points
     ho, hmax, imax, ho_zstep = temp_cross_correlation_gpu(inter_points_L, inter_points_R, points_3d)
+    t6 = time.time()
+    spatial_corr = spatial_correlation(images_left=left_images, images_right=right_images,
+                                       uv_points_l=uv_points_l, uv_points_r=uv_points_r)
+    print("Spatial \n dt: {} s".format(round((time.time() - t6), 2)))
+    t7 = time.time()
+    spatial_corr_gpu = spatial_correlation_gpu(images_left=cp.asarray(left_images), images_right=cp.asarray(right_images),
+                                       uv_points_l=cp.asarray(uv_points_l), uv_points_r=cp.asarray(uv_points_r))
 
+    print("Spatial GPU\n dt: {} s".format(round((time.time() - t7), 2)))
+    fused_corr, correl_max, correl_id = fuse_correlations(spatial_corr=spatial_corr, temporal_corr=cp.asnumpy(ho),
+                                                          points_3d=points_3d)
     t5 = time.time()
     print("Cross Correlation \n dt: {} s".format(round((t5 - t4), 2)))
-
 
     filtered_3d_ho = points_3d[cp.asnumpy(imax[hmax > 0.95]).astype(np.int32)]
 
@@ -512,20 +707,20 @@ def fringe_zscan(points_3d, yaml_file, image_name, output='fringe_points', DEBUG
     debugger.plot_3d_points(filtered_3d_phi[:, 0], filtered_3d_phi[:, 1], filtered_3d_phi[:, 2], color=None,
                             title="Point Cloud of min phase diff - {} px per fringe".format(output))
     debugger.plot_3d_points(filtered_mask[:, 0], filtered_mask[:, 1], filtered_mask[:, 2], color=None,
-                        title="Fringe Mask")
+                            title="Fringe Mask")
 
 
 def main():
     yaml_file_SM4 = 'cfg/SM4_20241004_bianca.yaml'
     images_path_SM4 = 'images/SM4-20241004 - noise'  # sm4
-    yaml_file_SM3 = 'cfg/SM3_20240918_bouget.yaml'
-    images_path_SM3 = 'images/SM3-20240918 - noise'
-    # images_path_SM3 = '/home/daniel/Insync/daniel.regner@labmetro.ufsc.br/Google Drive - Shared drives/VORIS  - Equipe/Sistema de Medição 3 - Stereo Ativo - Projeção Laser/Imagens/Testes/SM3-20240828 - GC (f50)'
+    yaml_file_SM3 = 'cfg/SM3_20240828_bouget.yaml'
+    # images_path_SM3 = 'images/SM3-20240918 - noise'
+    images_path_SM3 = '/home/daniel/Insync/daniel.regner@labmetro.ufsc.br/Google Drive - Shared drives/VORIS  - Equipe/Sistema de Medição 3 - Stereo Ativo - Projeção Laser/Imagens/Testes/SM3-20240828 - GC (f50)'
     fringe_image_name = '016.csv'
 
     t0 = time.time()
     points_3d_SM4 = project_points.points3d_cube(x_lim=(-50, 250), y_lim=(-150, 200), z_lim=(-100, 200),
-                                                 xy_step=2, z_step=0.1, visualize=False)  # pontos para SM4
+                                                 xy_step=50, z_step=0.1, visualize=False)  # pontos para SM4
     print('Time for 3d points \n {} dt'.format(round((time.time() - t0), 2)))
     # points_3d_SM4 = project_points.points3d_cube_gpu(x_lim=(-50, 250), y_lim=(-150, 200), z_lim=(-100, 300),
     #                                              xy_step=2, z_step=0.1, visualize=False)  # pontos para SM4
@@ -533,13 +728,16 @@ def main():
     # print('Time for 3d points gpu {} dt'.format(round((time.time() - t1), 2)))
 
     points_3d_SM3 = project_points.points3d_cube(x_lim=(-250, 300), y_lim=(-250, 250), z_lim=(-100, 100),
-                                                 xy_step=5, z_step=0.1, visualize=False)  # pontos para SM3
+                                                 xy_step=10, z_step=1, visualize=False)  # pontos para SM3
 
-    fringe_zscan(points_3d=points_3d_SM4, yaml_file=yaml_file_SM4, image_name=fringe_image_name,
-                 output=os.path.join('output', fringe_image_name.split('.')[0]), DEBUG=False, SAVE=False)
+    # fringe_zscan(points_3d=points_3d_SM4, yaml_file=yaml_file_SM4, image_name=fringe_image_name,
+    #              output=os.path.join('output', fringe_image_name.split('.')[0]), DEBUG=False, SAVE=False)
+    #
+    correl_zscan(points_3d_SM4, yaml_file=yaml_file_SM4, images_path=images_path_SM4, Nimg=10,
+                 output=os.path.join('output', images_path_SM3.split('/')[-1]), DEBUG=False, SAVE=False)
 
-    # correl_zscan(points_3d_SM4, yaml_file=yaml_file_SM4, images_path=images_path_SM4, Nimg=20,
-    #              output=os.path.join('output', images_path_SM4.split('/')[-1]), DEBUG=False, SAVE=False)
+    # correl_zscan(points_3d_SM3, yaml_file=yaml_file_SM3, images_path=images_path_SM3, Nimg=10,
+    #              output=os.path.join('output', images_path_SM3.split('/')[-1]), DEBUG=False, SAVE=False)
 
 
 if __name__ == '__main__':

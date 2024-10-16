@@ -8,6 +8,7 @@ import gc
 import rectify_matrix
 import debugger
 
+
 def points3d_cube_gpu(x_lim=(-5, 5), y_lim=(-5, 5), z_lim=(0, 5), xy_step=1.0, z_step=1.0, visualize=True, max_memory_gb=4):
     """
     Create a 3D space of combinations from linear arrays of X, Y, Z on the GPU.
@@ -81,6 +82,8 @@ def points3d_cube_gpu(x_lim=(-5, 5), y_lim=(-5, 5), z_lim=(0, 5), xy_step=1.0, z
         debugger.plot_3d_points(x=cube_points[:, 0], y=cube_points[:, 1], z=cube_points[:, 2])
 
     return cube_points
+
+
 def points3d_cube(x_lim=(-5, 5), y_lim=(-5, 5), z_lim=(0, 5), xy_step=1.0, z_step=1.0, visualize=True):
     """
     Create a 3D space of combination from linear arrays of X Y Z
