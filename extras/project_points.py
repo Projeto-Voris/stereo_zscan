@@ -1,12 +1,12 @@
 import cv2
-import matplotlib.pyplot as plt
 import numpy as np
 import os
 import cupy as cp
 import gc
 
-import rectify_matrix
-import debugger
+from extras import rectify_matrix
+from extras import debugger
+
 
 def points3d_cube_gpu(x_lim=(-5, 5), y_lim=(-5, 5), z_lim=(0, 5), xy_step=1.0, z_step=1.0, visualize=True, max_memory_gb=4):
     """
@@ -81,6 +81,8 @@ def points3d_cube_gpu(x_lim=(-5, 5), y_lim=(-5, 5), z_lim=(0, 5), xy_step=1.0, z
         debugger.plot_3d_points(x=cube_points[:, 0], y=cube_points[:, 1], z=cube_points[:, 2])
 
     return cube_points
+
+
 def points3d_cube(x_lim=(-5, 5), y_lim=(-5, 5), z_lim=(0, 5), xy_step=1.0, z_step=1.0, visualize=True):
     """
     Create a 3D space of combination from linear arrays of X Y Z
@@ -349,7 +351,7 @@ def read_images(path, images_list, n_images, visualize=False, CLAHE=False):
 
 def main():
     # Paths for yaml file and images
-    yaml_file = 'cfg/SM3_20240918_bouget.yaml'
+    yaml_file = '../cfg/SM3_20240918_bouget.yaml'
     # images_path = 'images/SM4-20241004 -calib 25x25'
     images_path = '/home/daniel/Insync/daniel.regner@labmetro.ufsc.br/Google Drive - Shared drives/VORIS  - Equipe/Sistema de Medição 3 - Stereo Ativo - Projeção Laser/Imagens/Calibração/SM3-20240918 - calib 10x10'
     Nimg = 5
