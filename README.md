@@ -20,7 +20,7 @@
 - **Software**:
   - Python 3.x
   - OpenCV 4.x
-  - (Spinnaker SDK for Python)[https://www.teledynevisionsolutions.com/products/spinnaker-sdk/?model=Spinnaker%20SDK&vertical=machine%20vision&segment=iis]
+  - [Spinnaker SDK for Python](https://www.teledynevisionsolutions.com/products/spinnaker-sdk/?model=Spinnaker%20SDK&vertical=machine%20vision&segment=iis)
 
 ## Installation
 
