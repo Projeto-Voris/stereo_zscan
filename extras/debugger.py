@@ -6,6 +6,67 @@ import matplotlib.pyplot as plt
 import os
 
 
+def rectify_images(imgL, imgR, mtxL, distL, R1, P1, mtxR, distR, R2, P2):
+    """Retifica imagens das câmeras esquerda e direita."""
+    grayL = cv2.cvtColor(imgL, cv2.COLOR_BGR2GRAY)
+    grayR = cv2.cvtColor(imgR, cv2.COLOR_BGR2GRAY)
+    left_map1, left_map2 = cv2.initUndistortRectifyMap(mtxL, distL, R1, P1, grayL.shape[::-1], cv2.CV_16SC2)
+    right_map1, right_map2 = cv2.initUndistortRectifyMap(mtxR, distR, R2, P2, grayR.shape[::-1], cv2.CV_16SC2)
+    rectifiedL = cv2.remap(grayL, left_map1, left_map2, cv2.INTER_LINEAR)
+    rectifiedR = cv2.remap(grayR, right_map1, right_map2, cv2.INTER_LINEAR)
+    return rectifiedL, rectifiedR
+
+
+def calculate_disparity(rectifiedL, rectifiedR):
+    """Calcula a disparidade entre as imagens retificadas."""
+    stereo = cv2.StereoBM_create(numDisparities=16 * 10, blockSize=15)
+    disparity = stereo.compute(rectifiedL, rectifiedR)
+    return disparity
+
+
+def generate_point_cloud(disparity, Q, imgL):
+    """Gera a nuvem de pontos 3D a partir da disparidade."""
+    points_3D = cv2.reprojectImageTo3D(disparity, Q)
+    mask = disparity > disparity.min()
+    output_points = points_3D[mask]
+    output_colors = imgL[mask]
+    return output_points, output_colors
+
+
+def save_point_cloud(points, colors, output_file, scale_factor=0.00345):
+    """Salva a nuvem de pontos em um arquivo PLY."""
+    points_scaled = points * scale_factor
+    ply_header = '''ply
+                    format ascii 1.0
+                    element vertex %(vert_num)d
+                    property float x
+                    property float y
+                    property float z
+                    property uchar red
+                    property uchar green
+                    property uchar blue
+                    end_header
+                    '''
+    with open(output_file, 'w') as f:
+        f.write(ply_header % dict(vert_num=len(points_scaled)))
+        for point, color in zip(points_scaled, colors):
+            f.write(f"{point[0]} {point[1]} {point[2]} {color[2]} {color[1]} {color[0]}\n")
+
+
+def show_image(image):
+    cv2.imshow('Image', image)
+    cv2.waitKey(0)
+    cv2.destroyWindow('Image')
+
+def show_stereo_images(imgR, imgL):
+    img_concatenate = np.concatenate((imgL, imgR), axis=1)
+    cv2.namedWindow('Stereo', cv2.WINDOW_NORMAL)
+    cv2.resizeWindow('Stereo', int(img_concatenate.shape[1] / 4), int(img_concatenate.shape[0] / 4))
+    cv2.imshow('Stereo', img_concatenate)
+    cv2.waitKey(0)
+    cv2.destroyWindow('Stereo')
+
+
 def save_array_to_csv(array, filename):
     """
     Save a 2D NumPy array to a CSV file.

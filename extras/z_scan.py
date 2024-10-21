@@ -4,7 +4,6 @@ import gc  # Garbage collector
 import cv2
 import numpy as np
 import cupy as cp
-import matplotlib.pyplot as plt
 
 import debugger
 import rectify_matrix
@@ -403,6 +402,8 @@ def spatial_correlation(images_left, images_right, uv_points_l, uv_points_r, poi
         spatial_id[k] = np.nanargmax(spatial_range) + k * z_step
 
     return spatial_corr, spatial_max, spatial_id
+
+
 def spatial_correlation_gpu(images_left, images_right, uv_points_l, uv_points_r, points_3d, window_size=3,
                             max_memory_gb=3):
     """
@@ -486,6 +487,7 @@ def spatial_correlation_gpu(images_left, images_right, uv_points_l, uv_points_r,
 
     # Return results as NumPy arrays
     return cp.asnumpy(spatial_corr), cp.asnumpy(spatial_max), cp.asnumpy(spatial_id)
+
 
 def fuse_correlations(spatial_corr, temporal_corr, points_3d, alpha=0.5, beta=0.5):
     """
@@ -608,16 +610,14 @@ def correl_zscan(points_3d, yaml_file, images_path, Nimg, win_size=7, output='Co
                                                                     points_3d=points_3d, window_size=win_size)
     else:
         spatial_corr, spatial_max, spatial_id = spatial_correlation_gpu(images_left=left_images,
-                                                                                    images_right=right_images,
-                                                                                    uv_points_l=uv_points_l,
-                                                                                    uv_points_r=uv_points_r,
-                                                                                    points_3d=points_3d,
-                                                                                    window_size=win_size)
+                                                                        images_right=right_images,
+                                                                        uv_points_l=uv_points_l,
+                                                                        uv_points_r=uv_points_r,
+                                                                        points_3d=points_3d,
+                                                                        window_size=win_size)
 
     t5 = time.time()
     print("Spatial GPU\n dt: {} s".format(round((t5 - t4), 2)))
-
-
 
     # Temporal correlation for L and R interpolated points
     ho, hmax, imax, ho_zstep = temp_cross_correlation_gpu(inter_points_L, inter_points_R, points_3d)
@@ -649,15 +649,19 @@ def correl_zscan(points_3d, yaml_file, images_path, Nimg, win_size=7, output='Co
 
     debugger.plot_3d_points(filtered_3d_ho[:, 0], filtered_3d_ho[:, 1], filtered_3d_ho[:, 2],
                             color=cp.asnumpy(hmax[hmax > 0.95].astype(np.float32)),
-                            title="Temporal Correl total for {} images and {} window size,from {}".format(Nimg,win_size, output))
+                            title="Temporal Correl total for {} images and {} window size,from {}".format(Nimg,
+                                                                                                          win_size,
+                                                                                                          output))
 
     debugger.plot_3d_points(filtered_3d_spatial[:, 0], filtered_3d_spatial[:, 1], filtered_3d_spatial[:, 2],
                             color=spatial_max[spatial_max > 0.95],
-                            title="Spatial Correl total for {} images and {} window size,from {}".format(Nimg,win_size, output))
+                            title="Spatial Correl total for {} images and {} window size,from {}".format(Nimg, win_size,
+                                                                                                         output))
 
     debugger.plot_3d_points(filtered_3d_fused[:, 0], filtered_3d_fused[:, 1], filtered_3d_fused[:, 2],
                             color=fused_max[fused_max > 0.95].astype(np.float32),
-                            title="Fused Correl total for {} images and {} window size,from {}".format(Nimg,win_size, output))
+                            title="Fused Correl total for {} images and {} window size,from {}".format(Nimg, win_size,
+                                                                                                       output))
 
     print('wait')
 
@@ -668,11 +672,11 @@ def fringe_zscan(points_3d, yaml_file, image_name, output='fringe_points', DEBUG
     left_images = []
     right_images = []
 
-    for img_l, img_r in zip(sorted(os.listdir('csv/left')), sorted(os.listdir('csv/right'))):
+    for img_l, img_r in zip(sorted(os.listdir('../csv/left')), sorted(os.listdir('../csv/right'))):
         if img_l.split('left_abs_')[-1] == image_name:
-            left_images.append(debugger.load_array_from_csv(os.path.join('csv/left', img_l)))
+            left_images.append(debugger.load_array_from_csv(os.path.join('../csv/left', img_l)))
         if img_r.split('right_abs_')[-1] == image_name:
-            right_images.append(debugger.load_array_from_csv(os.path.join('csv/right', img_r)))
+            right_images.append(debugger.load_array_from_csv(os.path.join('../csv/right', img_r)))
 
     left_images = np.stack(left_images, axis=-1).astype(np.float16)
     right_images = np.stack(right_images, axis=-1).astype(np.float16)
@@ -726,34 +730,27 @@ def fringe_zscan(points_3d, yaml_file, image_name, output='fringe_points', DEBUG
                             title="Fringe Mask")
 
 
+from include.InverseTriangulation import InverseTriangulation
+
+
 def main():
-    yaml_file_SM4 = 'cfg/SM4_20241004_bianca.yaml'
-    images_path_SM4 = 'images/SM4-20241004 - noise'  # sm4
-    yaml_file_SM3 = 'cfg/SM3_20240918_bouget.yaml'
-    images_path_SM3 = 'images/SM3-20240918 - noise'
-    # images_path_SM3 = '/home/daniel/Insync/daniel.regner@labmetro.ufsc.br/Google Drive - Shared drives/VORIS  - Equipe/Sistema de Medição 3 - Stereo Ativo - Projeção Laser/Imagens/Testes/SM3-20240828 - GC (f50)'
+    yaml_file = '../cfg/SM4_20241004_bianca.yaml'
+    images_path = '../images/SM4-20241004 - noise'  # sm4
+    Nimg = 10
     fringe_image_name = '016.csv'
 
+    left_images = project_points.read_images(os.path.join(images_path, 'left', ),
+                                             sorted(os.listdir(os.path.join(images_path, 'left'))),
+                                             n_images=Nimg, visualize=False)
+
+    right_images = project_points.read_images(os.path.join(images_path, 'right', ),
+                                              sorted(os.listdir(os.path.join(images_path, 'right'))),
+                                              n_images=Nimg, visualize=False)
+
     t0 = time.time()
-    points_3d_SM4 = project_points.points3d_cube(x_lim=(-50, 250), y_lim=(-150, 200), z_lim=(-100, 200),
-                                                 xy_step=5, z_step=0.1, visualize=False)  # pontos para SM4
+    points_3d = project_points.points3d_cube(x_lim=(-50, 250), y_lim=(-150, 200), z_lim=(-100, 200),
+                                             xy_step=5, z_step=0.1, visualize=False)  # pontos para SM4
     print('Time for 3d points \n {} dt'.format(round((time.time() - t0), 2)))
-    # points_3d_SM4 = project_points.points3d_cube_gpu(x_lim=(-50, 250), y_lim=(-150, 200), z_lim=(-100, 300),
-    #                                              xy_step=2, z_step=0.1, visualize=False)  # pontos para SM4
-    #
-    # print('Time for 3d points gpu {} dt'.format(round((time.time() - t1), 2)))
-
-    points_3d_SM3 = project_points.points3d_cube(x_lim=(-250, 300), y_lim=(-250, 250), z_lim=(-100, 100),
-                                                 xy_step=5, z_step=0.1, visualize=False)  # pontos para SM3
-
-    # fringe_zscan(points_3d=points_3d_SM4, yaml_file=yaml_file_SM4, image_name=fringe_image_name,
-    #              output=os.path.join('output', fringe_image_name.split('.')[0]), DEBUG=False, SAVE=False)
-    #
-    correl_zscan(points_3d_SM3, yaml_file=yaml_file_SM3, images_path=images_path_SM3, Nimg=10, win_size=15,
-                 output=os.path.join('output', images_path_SM3.split('/')[-1]), DEBUG=False, SAVE=False)
-
-    correl_zscan(points_3d_SM4, yaml_file=yaml_file_SM4, images_path=images_path_SM4, Nimg=10, win_size=15,
-                 output=os.path.join('output', images_path_SM4.split('/')[-1]), DEBUG=False, SAVE=False)
 
 
 if __name__ == '__main__':
