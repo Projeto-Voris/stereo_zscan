@@ -329,8 +329,8 @@ def read_images(path, images_list, n_images, visualize=False, CLAHE=False):
     """
     # Read all images using list comprehension
     if CLAHE:
-        clahe = cv2.createCLAHE(clipLimit=5.0, tileGridSize=(8, 8))
-        images = [clahe.apply(cv2.imread(os.path.join(path, str(img_name))), cv2.IMREAD_GRAYSCALE)
+        clahe = cv2.createCLAHE(clipLimit=11.0, tileGridSize=(11, 11))
+        images = [clahe.apply(cv2.imread(os.path.join(path, str(img_name)), cv2.IMREAD_GRAYSCALE))
                   for img_name in images_list[0:n_images]]
     else:
         images = [cv2.imread(os.path.join(path, str(img_name)), cv2.IMREAD_GRAYSCALE)
@@ -351,21 +351,21 @@ def read_images(path, images_list, n_images, visualize=False, CLAHE=False):
 
 def main():
     # Paths for yaml file and images
-    yaml_file = '../cfg/SM3_20240918_bouget.yaml'
+    yaml_file = '../cfg/SM4_20241018_bouget.yaml'
     # images_path = 'images/SM4-20241004 -calib 25x25'
-    images_path = '/home/daniel/Insync/daniel.regner@labmetro.ufsc.br/Google Drive - Shared drives/VORIS  - Equipe/Sistema de Medição 3 - Stereo Ativo - Projeção Laser/Imagens/Calibração/SM3-20240918 - calib 10x10'
+    images_path = '../images/SM4-20241112 - close'
     Nimg = 5
     # # Identify all images from path file
     left_images = read_images(os.path.join(images_path, 'left', ),
-                              sorted(os.listdir(os.path.join(images_path, 'left'))), n_images=Nimg)
+                              sorted(os.listdir(os.path.join(images_path, 'left'))), n_images=Nimg, CLAHE=True)
     right_images = read_images(os.path.join(images_path, 'right', ),
-                               sorted(os.listdir(os.path.join(images_path, 'right'))), n_images=Nimg)
+                               sorted(os.listdir(os.path.join(images_path, 'right'))), n_images=Nimg, CLAHE=True)
 
     # Read file containing all calibration qparameters from stereo system
     Kl, Dl, Rl, Tl, Kr, Dr, Rr, Tr, R, T = rectify_matrix.load_camera_params(yaml_file=yaml_file)
     # xyz_points = z_scan_temporal.points3d_cube(xy=(-1, 1), z=(0, 1), xy_step=0.1, z_step=0.5, visualize=False)
 
-    xy_points = points3d_cube(x_lim=(-50, 250), y_lim=(-150, 200), z_lim=(-0, 100 ), xy_step=10, z_step=1,
+    xy_points = points3d_cube(x_lim=(-300, 600), y_lim=(-300, 500), z_lim=(-0, 1), xy_step=10, z_step=1,
                                              visualize=False)
 
     uv_points_L = gcs2ccs(xy_points, Kl, Dl, Rl, Tl)

@@ -79,7 +79,7 @@ def save_array_to_csv(array, filename):
     print(f"Array saved to {filename}")
 
 
-def load_array_from_csv(filename):
+def load_array_from_csv(filename, delimiter=','):
     """
     Load a 2D NumPy array from a CSV file.
 
@@ -87,7 +87,7 @@ def load_array_from_csv(filename):
     :return: 2D numpy array
     """
     # Load the array from the CSV file
-    array = np.loadtxt(filename, delimiter=',')
+    array = np.loadtxt(filename, delimiter=delimiter)
     return array
 
 
