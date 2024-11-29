@@ -35,7 +35,7 @@ def main():
         t2 = time.time()
         Zscan = InverseTriangulation(yaml_file=yaml_file)
         Zscan.read_images(right_imgs=right_images[:, :, :n_img], left_imgs=left_images[:, :, :n_img])
-        points_3d = Zscan.points3d(x_lim=(-0, 350), y_lim=(-100, 400), z_lim=(100, 300), xy_step=5, z_step=1,
+        points_3d = Zscan.points3d(x_lim=(-0, 350), y_lim=(-100, 400), z_lim=(100, 300), xy_step=5, z_step=0.1,
                                    visualize=False)
         # points_3d = Zscan.points3d(x_lim=(-0, 10), y_lim=(0, 10), z_lim=(0, 10), xy_step=2, z_step=5,
         #                            visualize=False)
@@ -44,7 +44,7 @@ def main():
         # z_lin = np.split(np.arange(-1000, 1000, 0.1), 10)
         # for zlin in z_lin:
         #     points_3d = Zscan.points3d_zstep(x_lim=(-0, 350), y_lim=(-100, 400), z_lin=zlin, xy_step=2, visualize=False)
-        correl_points = Zscan.correlation_process(points_3d=points_3d, visualize=True, save_points=True, correl_param=(1, 0))
+        correl_points = Zscan.correlation_process(points_3d=points_3d, visualize=True, save_points=False, win_size=7)
 
     print('Full time: {} s'.format(round(time.time() - t0, 2)))
 
