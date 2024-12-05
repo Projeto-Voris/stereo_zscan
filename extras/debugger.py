@@ -4,6 +4,23 @@ import cv2
 import numpy as np
 import matplotlib.pyplot as plt
 import os
+from scipy.interpolate import griddata
+import cupy as cp
+
+def plot_surf(uv_points, combined_std_mean):
+    # Assuming UV points (uv_left) and combined_std_mean are given
+    uv_points_np = cp.asnumpy(uv_points.T)  # Shape: (N, 2), convert to NumPy
+    std_values_np = cp.asnumpy(combined_std_mean)  # Shape: (N,)
+
+    # Plot the scatter plot
+    plt.figure(figsize=(10, 8))
+    plt.scatter(uv_points_np[:, 0], uv_points_np[:, 1], c=std_values_np, cmap='viridis', s=10, alpha=0.8)
+    plt.colorbar(label='Standard Deviation')
+    plt.xlabel('U Coordinate')
+    plt.ylabel('V Coordinate')
+    plt.title('Scatter Plot of Standard Deviation at UV Points')
+    plt.grid(True)
+    plt.show()
 
 
 def rectify_images(imgL, imgR, mtxL, distL, R1, P1, mtxR, distR, R2, P2):

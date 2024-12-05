@@ -2,14 +2,17 @@ import numpy as np
 import matplotlib.pyplot as plt
 import os
 import time
+
+from cupyx.scipy.signal import correlation_lags
+
 from include.InverseTriangulation import InverseTriangulation
 from extras.debugger import load_array_from_csv
 from extras.project_points import read_images, points3d_cube
 
 
 def main():
-    yaml_file = 'cfg/SM4_20241018_bouget.yaml'
-    images_path = 'images/SM4-20241112 - close'
+    yaml_file = 'cfg/SM4_20241004_bianca.yaml'
+    images_path = 'images/SM4-20241004 - noise'
 
     Nimg = 40
     fringe_image_name = '016.csv'
@@ -35,18 +38,31 @@ def main():
         t2 = time.time()
         Zscan = InverseTriangulation(yaml_file=yaml_file)
         Zscan.read_images(right_imgs=right_images[:, :, :n_img], left_imgs=left_images[:, :, :n_img])
-        points_3d = Zscan.points3d(x_lim=(-0, 350), y_lim=(-100, 400), z_lim=(100, 300), xy_step=5, z_step=0.1,
+        points_3d = Zscan.points3d(x_lim=(-300, 350), y_lim=(-400, 400), z_lim=(-800, 400), xy_step=15, z_step=2,
                                    visualize=False)
-        # points_3d = Zscan.points3d(x_lim=(-0, 10), y_lim=(0, 10), z_lim=(0, 10), xy_step=2, z_step=5,
-        #                            visualize=False)
+        print('3D meshgrid pts: {} mi '.format(points_3d.shape[0]/1e6))
         print('Create mesgrid pcl: {} s'.format(round(time.time() - t2, 2)))
         t3 = time.time()
-        # z_lin = np.split(np.arange(-1000, 1000, 0.1), 10)
-        # for zlin in z_lin:
-        #     points_3d = Zscan.points3d_zstep(x_lim=(-0, 350), y_lim=(-100, 400), z_lin=zlin, xy_step=2, visualize=False)
-        correl_points = Zscan.correlation_process(points_3d=points_3d, visualize=True, save_points=False, win_size=7)
+
+        correl_points = Zscan.correlation_process(points_3d=points_3d, visualize=False, save_points=False,
+                                                  win_size=7, threshold=0.95)
+        print('First Correl {}'.format(round(time.time() - t3, 2)))
+        t4 = time.time()
+
+        xlim, ylim, zlim = [min(correl_points[:,0]), max(correl_points[:,0])], [min(correl_points[:,1]), max(correl_points[:,1])], [min(correl_points[:,2]), max(correl_points[:,2])]
+        points_3d_2 = Zscan.points3d(x_lim=xlim, y_lim=ylim, z_lim=zlim, z_step=.5, xy_step=1, visualize=False)
+
+        print('2nd 3D meshgrid pts: {} mi'.format(points_3d_2.shape[0]/1e6))
+        print('Create second meshgrid pcl: {} s'.format(round(time.time() - t4, 2)))
+        t4 = time.time()
+        correl_points = Zscan.correlation_process(points_3d=points_3d_2, visualize=False, save_points=False,
+                                                  win_size=7, threshold=0.9)
+        print('Second Correl {}'.format(round(time.time() - t4, 2)))
+
 
     print('Full time: {} s'.format(round(time.time() - t0, 2)))
+
+    Zscan.save_points(correl_points, filename='./sm4_parede_win7.csv')
 
     # Inverse Triangulation for correlation
     # Zscan.read_images(left_imgs=left_images, right_imgs=right_images)
