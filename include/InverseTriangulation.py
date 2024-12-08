@@ -26,7 +26,7 @@ class InverseTriangulation:
 
         self.z_scan_step = None
         self.num_points = None
-        self.max_gpu_usage = self.set_datalimit() // 3
+        self.max_gpu_usage = self.set_datalimit() // 2
 
         # self.uv_left = []
         # self.uv_right = []
@@ -65,25 +65,26 @@ class InverseTriangulation:
         self.z_scan_step = np.unique(c_points[:, 2]).shape[0]
 
         return c_points.astype(np.float16)
-
-    def points3d_zstep(self, x_lim=(-5, 5), y_lim=(-5, 5), z_lin=np.arange(0, 100, 0.1), visualize=False):
+    def points3d_gpu(self, x_lim=(-5, 5), y_lim=(-5, 5), z_lim=(0, 5), xy_step=1.0, z_step=1.0, visualize=False):
         """
             Create a 3D space of combination from linear arrays of X Y Z
             Parameters:
                 x_lim: Begin and end of linear space of X
                 y_lim: Begin and end of linear space of Y
-                z_lin: numpy array of z to be tested
+                z_lim: Begin and end of linear space of Z
                 xy_step: Step size between X and Y
+                z_step: Step size between Z and X
                 visualize: Visualize the 3D space
             Returns:
                 cube_points: combination of X Y and Z
-        """
-        x_lin = np.arange(x_lim[0], x_lim[1], xy_step)
-        y_lin = np.arange(y_lim[0], y_lim[1], xy_step)
+            """
+        x_lin = cp.arange(x_lim[0], x_lim[1], xy_step).astype(cp.float16)
+        y_lin = cp.arange(y_lim[0], y_lim[1], xy_step).astype(cp.float16)
+        z_lin = cp.arange(z_lim[0], z_lim[1], z_step).astype(cp.float16)
 
-        mg1, mg2, mg3 = np.meshgrid(x_lin, y_lin, z_lin, indexing='ij')
+        mg1, mg2, mg3 = cp.meshgrid(x_lin, y_lin, z_lin, indexing='ij')
 
-        c_points = np.stack([mg1, mg2, mg3], axis=-1).reshape(-1, 3)
+        c_points = cp.stack([mg1, mg2, mg3], axis=-1).reshape(-1, 3)
 
         if visualize:
             self.plot_3d_points(x=c_points[:, 0], y=c_points[:, 1], z=c_points[:, 2])
@@ -92,26 +93,6 @@ class InverseTriangulation:
         self.z_scan_step = np.unique(c_points[:, 2]).shape[0]
 
         return c_points
-
-    def points3D_arrays(self, x_lin: ndarray, y_lin: ndarray, z_lin: ndarray, visualize: bool = True) -> ndarray:
-        """
-        Crete 3D meshgrid of points based on input vectors of x, y and z
-        :param x_lin: linear space of x points
-        :param y_lin: linear space of y points
-        :param z_lin: linear space of z points
-        :param visualize: If true plot a 3d graph of points
-        :return: 3D meshgrid points size (N,3) where N = len(x)*len(y)*len(z)
-        """
-        mg1, mg2, mg3 = np.meshgrid(x_lin, y_lin, z_lin, indexing='ij')
-        points = np.stack([mg1, mg2, mg3], axis=-1).reshape(-1, 3)
-
-        if visualize:
-            self.plot_3d_points(x=points[:, 0], y=points[:, 1], z=points[:, 2])
-
-        self.num_points = points.shape[0]
-        self.z_scan_step = np.unique(points[:, 2]).shape[0]
-
-        return points
 
     def plot_3d_points(self, x, y, z, color=None, title='Plot 3D of max correlation points'):
         """
@@ -729,7 +710,7 @@ class InverseTriangulation:
         if save_points:
             self.save_points(space_temp_correl_pt, filename='./sm3_tubo.csv')
         if visualize:
-            self.plot_3d_points(space_temp_correl_pt[:, 0], space_temp_correl_pt[:, 1], space_temp_correl_pt[:, 2],
+            self.plot_3d_points(cp.asnumpy(space_temp_correl_pt[:, 0]), cp.asnumpy(space_temp_correl_pt[:, 1]),cp.asnumpy(space_temp_correl_pt[:, 2]),
                                 color=np.asarray(cp.asnumpy(spatial_max[correl_mask])),
                                 title="Temporal x Spatial correlation result"
                                       "\n {} imgs"
