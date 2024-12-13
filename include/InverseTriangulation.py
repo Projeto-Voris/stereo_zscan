@@ -65,6 +65,7 @@ class InverseTriangulation:
         self.z_scan_step = np.unique(c_points[:, 2]).shape[0]
 
         return c_points.astype(np.float16)
+
     def points3d_gpu(self, x_lim=(-5, 5), y_lim=(-5, 5), z_lim=(0, 5), xy_step=1.0, z_step=1.0, visualize=False):
         """
             Create a 3D space of combination from linear arrays of X Y Z
@@ -544,7 +545,7 @@ class InverseTriangulation:
             hmax[k] = cp.nanmax(ho_range)
             Imax[k] = cp.nanargmax(ho_range) + k * self.z_scan_step
 
-        return cp.asnumpy(ho), cp.asnumpy(hmax), cp.asnumpy(Imax), cp.asnumpy(ho_ztep)
+        return ho, hmax, Imax, ho_ztep
 
     def spatial_correl(self, uv_left, uv_right, window_size=3):
         """
@@ -647,7 +648,7 @@ class InverseTriangulation:
         # Return as NumPy arrays
         return spatial_id, spatial_max, std_corr
 
-    def correl_mask(self, std_correl, correl_max, std_thresh, correl_thresh):
+    def spatial_mask(self, std_correl, correl_max, std_thresh, correl_thresh):
         """
         Mask from correlation process to remove outbounds points.
         Paramenters:
@@ -667,7 +668,31 @@ class InverseTriangulation:
 
         return correl_mask & std_mask
 
-    def correlation_process(self, points_3d, win_size=3, threshold=0.8, save_points=True, visualize=False):
+    def temp_mask(self, std_i_left, std_i_right, correl_max, std_thresh, correl_thresh):
+        """
+        Mask from correlation process to remove outbounds points.
+        Paramenters:
+            std_l: STD interpolation image's points
+            std_r: STD interpolation image's points
+            phi_id: Indices for min phase difference
+            min_thresh: max threshold for STD
+            max_thresh: min threshold for STD
+        Returns:
+             valid_mask: Valid 3D points on image's plane
+        """
+
+        correl_mask = cp.zeros(correl_max.shape[0], dtype=bool)
+        std_mask = cp.zeros(std_i_left.shape[0], dtype=bool)
+        correl_mask[correl_max > correl_thresh] = True
+        mean_std_right = cp.mean(std_i_right, axis=1)
+        mean_std_left = cp.mean(std_i_left, axis=1)
+        std_mask[(std_thresh[0] < mean_std_right) & (mean_std_right < std_thresh[1]) &
+                 (std_thresh[0] < mean_std_left) & (mean_std_left < std_thresh[1])] = True
+
+        return correl_mask & std_mask
+
+    def correlation_process(self, points_3d, win_size=3, threshold=0.8, save_points=True, visualize=False,
+                            method='spatial'):
         """
         Zscan process of temporal and spatial correlations.
         Parameters:
@@ -677,43 +702,51 @@ class InverseTriangulation:
             threshold: (float) threshold of correlation coefficient
             save_points: (bool) whether to save temporal and spatial correlation images or not.
             visualize: (bool) whether to visualize correlation images or not.
+            method: (str) Method to correlation process: 'spatial' or 'temporal'
         Returns:
             correl_points: (X*Y, 3) list from bests correlation points.
+
         """
+        if method != 'spatial' and method != 'temporal':
+            raise ValueError('Method must be spatial or temporal.')
         t0 = time.time()
         uv_left = self.transform_gcs2ccs(points_3d=points_3d, cam_name='left')
         uv_right = self.transform_gcs2ccs(points_3d=points_3d, cam_name='right')
 
         print('Transform points to image: {:.2f} s'.format(time.time() - t0))
-        # t1 = time.time()
-        # inter_left, std_left = self.bi_interpolation(self.left_images, uv_left)
-        # inter_right, std_right = self.bi_interpolation(self.right_images, uv_right)
-        #
-        # print('Bi-Interpolation Time: {:.2f} s'.format(time.time() - t1))
-        t2 = time.time()
-        spatial_id, spatial_max, std_corr = self.spatial_correl(window_size=win_size, uv_left=uv_left,
-                                                                uv_right=uv_right)
-        print('Spatial correlation time: {:.2f} s'.format(time.time() - t2))
-        # t3 = time.time()
-        #
-        # ho, hmax, imax, ho_zstep = self.temp_cross_correlation(left_Igray=inter_left, right_Igray=inter_right)
-        #
-        # print('Temporal cross correlation time: {:.2f} s'.format(time.time() - t3))
+        if method == 'temporal':
+            t1 = time.time()
+            inter_left, std_left = self.bi_interpolation(self.left_images, uv_left)
+            inter_right, std_right = self.bi_interpolation(self.right_images, uv_right)
+            print('Bi-Interpolation Time: {:.2f} s'.format(time.time() - t1))
+            t3 = time.time()
+            ho, hmax, imax, ho_zstep = self.temp_cross_correlation(left_Igray=inter_left, right_Igray=inter_right)
+            print('Temporal cross correlation time: {:.2f} s'.format(time.time() - t3))
+            correl_maks = self.temp_mask(std_i_left=std_left[imax], std_i_right=std_right[imax], correl_max=hmax,
+                                         std_thresh=(10, 20), correl_thresh=threshold)
+            correl_pts = points_3d[np.asarray(cp.asnumpy(imax[correl_maks])).astype(np.int32)]
+            del inter_right, inter_left, ho, ho_zstep, hmax, imax
 
-        # temp_correl_pt = points_3d[np.asarray(imax[hmax > 0.95]).astype(np.int32)]
-        correl_mask = self.correl_mask(std_correl=std_corr, correl_max=spatial_max, correl_thresh=threshold,
-                                       std_thresh=60)
-        space_temp_correl_pt = points_3d[np.asarray(cp.asnumpy(spatial_id[correl_mask])).astype(np.int32)]
-
+        if method == 'spatial':
+            t2 = time.time()
+            spatial_id, spatial_max, std_corr = self.spatial_correl(window_size=win_size, uv_left=uv_left,
+                                                                    uv_right=uv_right)
+            print('Spatial correlation time: {:.2f} s'.format(time.time() - t2))
+            correl_mask = self.spatial_mask(std_correl=std_corr, correl_max=spatial_max, correl_thresh=threshold,
+                                            std_thresh=60)
+            correl_pts = points_3d[np.asarray(cp.asnumpy(spatial_id[correl_mask])).astype(np.int32)]
+            del spatial_id, spatial_max, std_corr
         print('Correlation process: {:.2f} s'.format(time.time() - t0))
 
         if save_points:
-            self.save_points(space_temp_correl_pt, filename='./sm3_tubo.csv')
+            self.save_points(correl_pts, filename='./sm3_tubo.csv')
         if visualize:
-            self.plot_3d_points(cp.asnumpy(space_temp_correl_pt[:, 0]), cp.asnumpy(space_temp_correl_pt[:, 1]),cp.asnumpy(space_temp_correl_pt[:, 2]),
-                                color=np.asarray(cp.asnumpy(spatial_max[correl_mask])),
+            self.plot_3d_points(cp.asnumpy(correl_pts[:, 0]), cp.asnumpy(correl_pts[:, 1]),
+                                cp.asnumpy(correl_pts[:, 2]),
+                                # color=np.asarray(cp.asnumpy(spatial_max[correl_mask])),
                                 title="Temporal x Spatial correlation result"
                                       "\n {} imgs"
                                       "\n{} win size".format(self.right_images.shape[2], win_size))
-        del uv_left, uv_right, spatial_id, spatial_max, std_corr
-        return space_temp_correl_pt
+        del uv_left, uv_right
+
+        return cp.asnumpy(correl_pts)

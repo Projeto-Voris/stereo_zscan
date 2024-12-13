@@ -8,7 +8,8 @@ from extras import rectify_matrix
 from extras import debugger
 
 
-def points3d_cube_gpu(x_lim=(-5, 5), y_lim=(-5, 5), z_lim=(0, 5), xy_step=1.0, z_step=1.0, visualize=True, max_memory_gb=4):
+def points3d_cube_gpu(x_lim=(-5, 5), y_lim=(-5, 5), z_lim=(0, 5), xy_step=1.0, z_step=1.0, visualize=True,
+                      max_memory_gb=4):
     """
     Create a 3D space of combinations from linear arrays of X, Y, Z on the GPU.
     Memory usage is limited to the specified max_memory_gb.
@@ -39,7 +40,7 @@ def points3d_cube_gpu(x_lim=(-5, 5), y_lim=(-5, 5), z_lim=(0, 5), xy_step=1.0, z
     total_memory_required = total_points * 3 * bytes_per_float32
 
     # Ensure it fits within max_memory_gb
-    max_bytes = max_memory_gb * 1024**3  # Convert GB to bytes
+    max_bytes = max_memory_gb * 1024 ** 3  # Convert GB to bytes
 
     # Calculate how many points we can safely store in memory at once
     if total_memory_required > max_bytes:
@@ -128,12 +129,12 @@ def undistorted_points(norm_points, distortion):
     k1, k2, p1, p2, k3 = distortion
 
     # Radial distortion correction
-    factor = (1 + k1 * r2 + k2 * r2 ** 2 + k3 * r2 ** 3) #TODO: Fix radial distortion equation
+    factor = (1 + k1 * r2 + k2 * r2 ** 2 + k3 * r2 ** 3)  # TODO: Fix radial distortion equation
 
     x_dist = norm_points[:, 0] * factor + 2 * p1 * norm_points[:, 0] * norm_points[:, 1] + p2 * (
             r2 + 2 * norm_points[:, 0] ** 2)
     y_dist = norm_points[:, 1] * factor + p1 * (r2 + 2 * norm_points[:, 1] ** 2) + 2 * p2 * norm_points[:,
-                                                                                                 0] * norm_points[:, 1]
+                                                                                            0] * norm_points[:, 1]
     # return with extra columns of ones
     return np.hstack((np.stack([x_dist, y_dist], axis=-1), np.ones((norm_points.shape[0], 1))))
 
@@ -205,7 +206,7 @@ def gcs2ccs_gpu(xyz_gcs, k, dist, rot, tran, max_memory_gb=4):
     total_memory_required = num_points * memory_per_point
 
     # Maximum bytes allowed for memory usage
-    max_bytes = max_memory_gb * 1024**3
+    max_bytes = max_memory_gb * 1024 ** 3
 
     # Adjust the batch size based on memory limitations
     if total_memory_required > max_bytes:
@@ -295,14 +296,14 @@ def undistorted_points_gpu(points, dist):
     x, y = points[:, 0], points[:, 1]
 
     # Calculate r^2 (squared distance from the origin)
-    r2 = x**2 + y**2
+    r2 = x ** 2 + y ** 2
 
     # Radial distortion
-    radial = 1 + k1 * r2 + k2 * r2**2 + k3 * r2**3
+    radial = 1 + k1 * r2 + k2 * r2 ** 2 + k3 * r2 ** 3
 
     # Tangential distortion
-    x_tangential = 2 * p1 * x * y + p2 * (r2 + 2 * x**2)
-    y_tangential = p1 * (r2 + 2 * y**2) + 2 * p2 * x * y
+    x_tangential = 2 * p1 * x * y + p2 * (r2 + 2 * x ** 2)
+    y_tangential = p1 * (r2 + 2 * y ** 2) + 2 * p2 * x * y
 
     # Compute distorted coordinates
     x_distorted = x * radial + x_tangential
@@ -351,9 +352,9 @@ def read_images(path, images_list, n_images, visualize=False, CLAHE=False):
 
 def main():
     # Paths for yaml file and images
-    yaml_file = '../cfg/SM4_20241018_bouget.yaml'
+    yaml_file = '../cfg/SM4_20241127.yaml'
     # images_path = 'images/SM4-20241004 -calib 25x25'
-    images_path = '../images/SM4-20241112 - close'
+    images_path = '/home/daniel/Insync/daniel.regner@labmetro.ufsc.br/Google Drive - Shared drives/VORIS  - Equipe/Sistema de Medição 3 - Stereo Ativo - Projeção Laser/Imagens/Testes/SM4_20241210_1'
     Nimg = 5
     # # Identify all images from path file
     left_images = read_images(os.path.join(images_path, 'left', ),
@@ -365,8 +366,8 @@ def main():
     Kl, Dl, Rl, Tl, Kr, Dr, Rr, Tr, R, T = rectify_matrix.load_camera_params(yaml_file=yaml_file)
     # xyz_points = z_scan_temporal.points3d_cube(xy=(-1, 1), z=(0, 1), xy_step=0.1, z_step=0.5, visualize=False)
 
-    xy_points = points3d_cube(x_lim=(-300, 600), y_lim=(-300, 500), z_lim=(-0, 1), xy_step=10, z_step=1,
-                                             visualize=False)
+    xy_points = points3d_cube(x_lim=(-600, 700), y_lim=(-600, 600), z_lim=(-0, 1), xy_step=10, z_step=1,
+                              visualize=False)
 
     uv_points_L = gcs2ccs(xy_points, Kl, Dl, Rl, Tl)
     uv_points_R = gcs2ccs(xy_points, Kr, Dr, Rr, Tr)
