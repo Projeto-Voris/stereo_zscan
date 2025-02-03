@@ -329,7 +329,7 @@ def read_images(path, images_list, n_images, visualize=False, CLAHE=False):
     """
     # Read all images using list comprehension
     if CLAHE:
-        clahe = cv2.createCLAHE(clipLimit=11.0, tileGridSize=(11, 11))
+        clahe = cv2.createCLAHE(clipLimit=7.0, tileGridSize=(5, 5))
         images = [clahe.apply(cv2.imread(os.path.join(path, str(img_name)), cv2.IMREAD_GRAYSCALE))
                   for img_name in images_list[0:n_images]]
     else:

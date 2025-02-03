@@ -496,7 +496,6 @@ class InverseTriangulation:
         """
 
         num_images = left_Igray.shape[1]  # Number of images
-        num_points = left_Igray.shape[0]  # Number of points
 
         # Number of tested Z (this will be used as batch size)
         num_pairs = self.num_points // self.z_scan_step  # Total number of XY points
@@ -686,7 +685,7 @@ class InverseTriangulation:
 
         return correl_mask & std_mask
 
-    def correlation_process(self, points_3d, win_size=3, threshold=0.8, save_points=True, visualize=False):
+    def spat_temp_correl_process(self, points_3d, win_size=3, threshold=0.8, save_points=True, visualize=False):
         """
         Zscan process of temporal and spatial correlations.
         Parameters:
@@ -713,13 +712,6 @@ class InverseTriangulation:
         spatial_id, spatial_max, std_corr = self.spatial_correl(window_size=win_size, uv_left=uv_left,
                                                                 uv_right=uv_right)
         print('Spatial correlation time: {:.2f} s'.format(time.time() - t2))
-        # t3 = time.time()
-        #
-        # ho, hmax, imax, ho_zstep = self.temp_cross_correlation(left_Igray=inter_left, right_Igray=inter_right)
-        #
-        # print('Temporal cross correlation time: {:.2f} s'.format(time.time() - t3))
-
-        # temp_correl_pt = points_3d[np.asarray(imax[hmax > 0.95]).astype(np.int32)]
         correl_mask = self.correl_mask(std_correl=std_corr, correl_max=spatial_max, correl_thresh=threshold,
                                        std_thresh=60)
         space_temp_correl_pt = points_3d[np.asarray(cp.asnumpy(spatial_id[correl_mask])).astype(np.int32)]
@@ -736,3 +728,50 @@ class InverseTriangulation:
                                       "\n{} win size".format(self.right_images.shape[2], win_size))
         del uv_left, uv_right, spatial_id, spatial_max, std_corr
         return space_temp_correl_pt
+
+    def temp_correlation_process(self, points_3d, threshold=0.8, save_points=True, visualize=False):
+        """
+        Zscan process of temporal and spatial correlations.
+        Parameters:
+            points_3d: ndarray(N,3) xyz meshgrid of points
+            correl_param: tuple(float) fused correlation parameter (spatial, correlation)
+            threshold: (float) threshold of correlation coefficient
+            save_points: (bool) whether to save temporal and spatial correlation images or not.
+            visualize: (bool) whether to visualize correlation images or not.
+        Returns:
+            correl_points: (X*Y, 3) list from bests correlation points.
+        """
+        t0 = time.time()
+        uv_left = self.transform_gcs2ccs(points_3d=points_3d, cam_name='left')
+        uv_right = self.transform_gcs2ccs(points_3d=points_3d, cam_name='right')
+
+        print('Transform points to image: {:.2f} s'.format(time.time() - t0))
+        t1 = time.time()
+        inter_left, std_left = self.bi_interpolation(self.left_images, uv_left)
+        inter_right, std_right = self.bi_interpolation(self.right_images, uv_right)
+        #
+        print('Bi-Interpolation Time: {:.2f} s'.format(time.time() - t1))
+        t2 = time.time()
+        # spatial_id, spatial_max, std_corr = self.spatial_correl(window_size=win_size, uv_left=uv_left,
+        #                                                         uv_right=uv_right)
+        # print('Spatial correlation time: {:.2f} s'.format(time.time() - t2))
+        t3 = time.time()
+        #
+        ho, hmax, imax, ho_zstep = self.temp_cross_correlation(left_Igray=inter_left, right_Igray=inter_right)
+        #
+        print('Temporal cross correlation time: {:.2f} s'.format(time.time() - t3))
+
+        temp_correl_pt = points_3d[np.asarray(imax[hmax > threshold]).astype(np.int32)]
+
+        print('Correlation process: {:.2f} s'.format(time.time() - t0))
+
+        if save_points:
+            self.save_points(temp_correl_pt, filename='./sm3_tubo.csv')
+        if visualize:
+            self.plot_3d_points(temp_correl_pt[:, 0], temp_correl_pt[:, 1], temp_correl_pt[:, 2],
+                                color=np.asarray(cp.asnumpy(imax[hmax > threshold])),
+                                title="Temporal correlation result"
+                                      "\n {} imgs".format(self.right_images.shape[2]))
+        del uv_left, uv_right, inter_right, inter_left, ho, hmax, imax, ho_zstep
+
+        return temp_correl_pt
