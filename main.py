@@ -33,7 +33,7 @@ def main():
     #
     # print("Create meshgrid of {} points: {} s".format(points_3d.shape[0], round(time.time() - t1, 2)))
 
-    n_imgs_v = [10]
+    n_imgs_v = [10, 20, 30]
     for n_img in n_imgs_v:
         print('Open Correlation images: {} s'.format(n_img))
         t2 = time.time()
@@ -54,32 +54,34 @@ def main():
             xlim, ylim, zlim = [min(correl_points[:, 0]), max(correl_points[:, 0])], [min(correl_points[:, 1]),
                                                                                       max(correl_points[:, 1])], [
                 min(correl_points[:, 2]), max(correl_points[:, 2])]
-            points_3d_2 = Zscan.points3d(x_lim=xlim, y_lim=ylim, z_lim=zlim, z_step=.5, xy_step=1, visualize=True)
+            points_3d_2 = Zscan.points3d(x_lim=xlim, y_lim=ylim, z_lim=zlim, z_step=.1, xy_step=1, visualize=False)
 
             print('2nd 3D meshgrid pts: {} mi'.format(points_3d_2.shape[0] / 1e6))
             print('Create second meshgrid pcl: {} s'.format(round(time.time() - t4, 2)))
             t4 = time.time()
             correl_points = Zscan.spat_temp_correl_process(points_3d=points_3d_2, visualize=True, save_points=False,
-                                                           win_size=15, threshold=0.9)
+                                                           win_size=21, threshold=0.8)
             print('Second Correl {}'.format(round(time.time() - t4, 2)))
         else:
 
-            correl_points = Zscan.temp_correlation_process(points_3d=points_3d, visualize=True, save_points=False, threshold=0.9)
+            correl_points = Zscan.temp_correlation_process(points_3d=points_3d, visualize=True, save_points=False,
+                                                           threshold=0.9)
             print('First Correl {}'.format(round(time.time() - t3, 2)))
             t4 = time.time()
 
             xlim, ylim, zlim = [min(correl_points[:, 0]), max(correl_points[:, 0])], [min(correl_points[:, 1]),
                                                                                       max(correl_points[:, 1])], [
                 min(correl_points[:, 2]), max(correl_points[:, 2])]
-            points_3d_2 = Zscan.points3d(x_lim=xlim, y_lim=ylim, z_lim=zlim, z_step=1, xy_step=.1, visualize=True)
+            points_3d_2 = Zscan.points3d(x_lim=xlim, y_lim=ylim, z_lim=zlim, z_step=1, xy_step=.05, visualize=True)
 
             print('2nd 3D meshgrid pts: {} mi'.format(points_3d_2.shape[0] / 1e6))
             print('Create second meshgrid pcl: {} s'.format(round(time.time() - t4, 2)))
             t4 = time.time()
-            correl_points = Zscan.temp_correlation_process(points_3d=points_3d_2, visualize=False, save_points=False, threshold=0.95)
+            correl_points = Zscan.temp_correlation_process(points_3d=points_3d_2, visualize=False, save_points=False,
+                                                           threshold=0.95)
             print('Second Correl {}'.format(round(time.time() - t4, 2)))
 
-    print('Full time: {} s'.format(round(time.time() - t0, 2)))
+        print('Full time: {} s'.format(round(time.time() - t0, 2)))
 
     # Zscan.save_points(correl_points, filename='./sm4_parede_win7.csv')
 

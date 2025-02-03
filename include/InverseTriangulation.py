@@ -713,7 +713,7 @@ class InverseTriangulation:
                                                                 uv_right=uv_right)
         print('Spatial correlation time: {:.2f} s'.format(time.time() - t2))
         correl_mask = self.correl_mask(std_correl=std_corr, correl_max=spatial_max, correl_thresh=threshold,
-                                       std_thresh=60)
+                                       std_thresh=20)
         space_temp_correl_pt = points_3d[np.asarray(cp.asnumpy(spatial_id[correl_mask])).astype(np.int32)]
 
         print('Correlation process: {:.2f} s'.format(time.time() - t0))
@@ -722,7 +722,6 @@ class InverseTriangulation:
             self.save_points(space_temp_correl_pt, filename='./sm3_tubo.csv')
         if visualize:
             self.plot_3d_points(space_temp_correl_pt[:, 0], space_temp_correl_pt[:, 1], space_temp_correl_pt[:, 2],
-                                color=np.asarray(cp.asnumpy(spatial_max[correl_mask])),
                                 title="Temporal x Spatial correlation result"
                                       "\n {} imgs"
                                       "\n{} win size".format(self.right_images.shape[2], win_size))
@@ -752,14 +751,10 @@ class InverseTriangulation:
         #
         print('Bi-Interpolation Time: {:.2f} s'.format(time.time() - t1))
         t2 = time.time()
-        # spatial_id, spatial_max, std_corr = self.spatial_correl(window_size=win_size, uv_left=uv_left,
-        #                                                         uv_right=uv_right)
-        # print('Spatial correlation time: {:.2f} s'.format(time.time() - t2))
-        t3 = time.time()
         #
         ho, hmax, imax, ho_zstep = self.temp_cross_correlation(left_Igray=inter_left, right_Igray=inter_right)
         #
-        print('Temporal cross correlation time: {:.2f} s'.format(time.time() - t3))
+        print('Temporal cross correlation time: {:.2f} s'.format(time.time() - t2))
 
         temp_correl_pt = points_3d[np.asarray(imax[hmax > threshold]).astype(np.int32)]
 

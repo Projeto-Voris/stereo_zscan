@@ -351,9 +351,9 @@ def read_images(path, images_list, n_images, visualize=False, CLAHE=False):
 
 def main():
     # Paths for yaml file and images
-    yaml_file = '../cfg/SM4_20241018_bouget.yaml'
+    yaml_file = '../cfg/SM3_20250203.yaml'
     # images_path = 'images/SM4-20241004 -calib 25x25'
-    images_path = '../images/SM4-20241112 - close'
+    images_path = '/home/daniel/Insync/daniel.regner@labmetro.ufsc.br/Google Drive - Shared drives/VORIS  - Equipe/Sistema de Medição 3 - Stereo Ativo - Projeção Laser/Imagens/Calibração/SM3_20250203'
     Nimg = 5
     # # Identify all images from path file
     left_images = read_images(os.path.join(images_path, 'left', ),
@@ -370,10 +370,10 @@ def main():
 
     uv_points_L = gcs2ccs(xy_points, Kl, Dl, Rl, Tl)
     uv_points_R = gcs2ccs(xy_points, Kr, Dr, Rr, Tr)
-    output_image_L = debugger.plot_points_on_image(image=left_images[:, :, 0], points=uv_points_L, color=(0, 255, 0),
+    output_image_L = debugger.plot_points_on_image(image=left_images[:, :, 1], points=uv_points_L, color=(0, 255, 0),
                                                    radius=5,
                                                    thickness=1)
-    output_image_R = debugger.plot_points_on_image(image=right_images[:, :, 0], points=uv_points_R, color=(0, 255, 0),
+    output_image_R = debugger.plot_points_on_image(image=right_images[:, :, 1], points=uv_points_R, color=(0, 255, 0),
                                                    radius=5,
                                                    thickness=1)
 
