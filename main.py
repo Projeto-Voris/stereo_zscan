@@ -12,7 +12,7 @@ from extras.project_points import read_images, points3d_cube
 
 def main():
     yaml_file = 'cfg/SM3_20250203.yaml'
-    images_path = '/home/daniel/Insync/daniel.regner@labmetro.ufsc.br/Google Drive - Shared drives/VORIS  - Equipe/Sistema de Medição 3 - Stereo Ativo - Projeção Laser/Imagens/Testes/20250203 - SM3 - speckle'
+    images_path = '/home/daniel/Pictures/20250205'
     Nimg = 40
     method = 'spatial'
     # fringe_image_name = '016.csv'
@@ -33,13 +33,13 @@ def main():
     #
     # print("Create meshgrid of {} points: {} s".format(points_3d.shape[0], round(time.time() - t1, 2)))
 
-    n_imgs_v = [10, 20, 30]
+    n_imgs_v = [10]
     for n_img in n_imgs_v:
         print('Open Correlation images: {} s'.format(n_img))
         t2 = time.time()
         Zscan = InverseTriangulation(yaml_file=yaml_file)
         Zscan.read_images(right_imgs=right_images[:, :, :n_img], left_imgs=left_images[:, :, :n_img])
-        points_3d = Zscan.points3d(x_lim=(-600, 600), y_lim=(-400, 400), z_lim=(-200, 200), xy_step=10, z_step=1,
+        points_3d = Zscan.points3d(x_lim=(-200, 200), y_lim=(-200, 200), z_lim=(-500, 500), xy_step=20, z_step=1,
                                    visualize=False)
         print('3D meshgrid pts: {} mi '.format(points_3d.shape[0] / 1e6))
         print('Create mesgrid pcl: {} s'.format(round(time.time() - t2, 2)))
@@ -47,7 +47,7 @@ def main():
         if method == 'spatial':
 
             correl_points = Zscan.spat_temp_correl_process(points_3d=points_3d, visualize=True, save_points=False,
-                                                           win_size=21, threshold=0.7)
+                                                           win_size=11, threshold=0.8)
             print('First Correl {}'.format(round(time.time() - t3, 2)))
             t4 = time.time()
 
@@ -59,8 +59,8 @@ def main():
             print('2nd 3D meshgrid pts: {} mi'.format(points_3d_2.shape[0] / 1e6))
             print('Create second meshgrid pcl: {} s'.format(round(time.time() - t4, 2)))
             t4 = time.time()
-            correl_points = Zscan.spat_temp_correl_process(points_3d=points_3d_2, visualize=True, save_points=False,
-                                                           win_size=21, threshold=0.8)
+            correl_points = Zscan.spat_temp_correl_process(points_3d=points_3d_2, visualize=True, save_points=True,
+                                                           win_size=15, threshold=0.8)
             print('Second Correl {}'.format(round(time.time() - t4, 2)))
         else:
 
@@ -82,6 +82,7 @@ def main():
             print('Second Correl {}'.format(round(time.time() - t4, 2)))
 
         print('Full time: {} s'.format(round(time.time() - t0, 2)))
+        print('---------------------')
 
     # Zscan.save_points(correl_points, filename='./sm4_parede_win7.csv')
 

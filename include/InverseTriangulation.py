@@ -719,12 +719,13 @@ class InverseTriangulation:
         print('Correlation process: {:.2f} s'.format(time.time() - t0))
 
         if save_points:
-            self.save_points(space_temp_correl_pt, filename='./sm3_tubo.csv')
+            self.save_points(space_temp_correl_pt, filename='./temp_{}_{}_{}.csv'.format(self.right_images.shape[2], int(threshold*100), win_size))
         if visualize:
             self.plot_3d_points(space_temp_correl_pt[:, 0], space_temp_correl_pt[:, 1], space_temp_correl_pt[:, 2],
                                 title="Temporal x Spatial correlation result"
                                       "\n {} imgs"
-                                      "\n{} win size".format(self.right_images.shape[2], win_size))
+                                      "\n {} % threshold"
+                                      "\n{} win size".format(self.right_images.shape[2], threshold*100, win_size))
         del uv_left, uv_right, spatial_id, spatial_max, std_corr
         return space_temp_correl_pt
 
@@ -761,7 +762,7 @@ class InverseTriangulation:
         print('Correlation process: {:.2f} s'.format(time.time() - t0))
 
         if save_points:
-            self.save_points(temp_correl_pt, filename='./sm3_tubo.csv')
+            self.save_points(temp_correl_pt, filename='./temp_{}_{}.csv'.format(self.right_images.shape[2], threshold))
         if visualize:
             self.plot_3d_points(temp_correl_pt[:, 0], temp_correl_pt[:, 1], temp_correl_pt[:, 2],
                                 color=np.asarray(cp.asnumpy(imax[hmax > threshold])),
