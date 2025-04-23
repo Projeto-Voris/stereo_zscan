@@ -5,7 +5,7 @@ import cv2
 import numpy as np
 import cupy as cp
 
-import debugger
+import extras.debugger as debugger
 import rectify_matrix
 import project_points
 

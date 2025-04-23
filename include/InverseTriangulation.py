@@ -1,3 +1,4 @@
+import cv2
 import numpy as np
 import cupy as cp
 import yaml
@@ -26,16 +27,23 @@ class InverseTriangulation:
 
         self.z_scan_step = None
         self.num_points = None
-        self.max_gpu_usage = self.set_datalimit() // 3
+        self.max_gpu_usage = self.set_datalimit() // 2
 
         # self.uv_left = []
         # self.uv_right = []
 
-    def read_images(self, left_imgs, right_imgs):
+    def read_images(self, left_imgs, right_imgs, undist=True):
         if len(left_imgs) != len(right_imgs):
             raise Exception("Number of images do not match")
+        if undist:
+            for k in range(left_imgs.shape[2]):
+                left_imgs[:, :, k] = self.remove_img_distortion(left_imgs[:, :, k], 'left')
+                right_imgs[:, :, k] = self.remove_img_distortion(right_imgs[:, :, k], 'right')
         self.left_images = cp.asarray(left_imgs)
         self.right_images = cp.asarray(right_imgs)
+
+    def remove_img_distortion(self, img, camera):
+        return cv2.undistort(img, self.camera_params[camera]['kk'], self.camera_params[camera]['kc'])
 
     def points3d(self, x_lim=(-5, 5), y_lim=(-5, 5), z_lim=(0, 5), xy_step=1.0, z_step=1.0, visualize=False):
         """
@@ -65,33 +73,6 @@ class InverseTriangulation:
         self.z_scan_step = np.unique(c_points[:, 2]).shape[0]
 
         return c_points.astype(np.float16)
-
-    def points3d_zstep(self, x_lim=(-5, 5), y_lim=(-5, 5), z_lin=np.arange(0, 100, 0.1), visualize=False):
-        """
-            Create a 3D space of combination from linear arrays of X Y Z
-            Parameters:
-                x_lim: Begin and end of linear space of X
-                y_lim: Begin and end of linear space of Y
-                z_lin: numpy array of z to be tested
-                xy_step: Step size between X and Y
-                visualize: Visualize the 3D space
-            Returns:
-                cube_points: combination of X Y and Z
-        """
-        x_lin = np.arange(x_lim[0], x_lim[1], xy_step)
-        y_lin = np.arange(y_lim[0], y_lim[1], xy_step)
-
-        mg1, mg2, mg3 = np.meshgrid(x_lin, y_lin, z_lin, indexing='ij')
-
-        c_points = np.stack([mg1, mg2, mg3], axis=-1).reshape(-1, 3)
-
-        if visualize:
-            self.plot_3d_points(x=c_points[:, 0], y=c_points[:, 1], z=c_points[:, 2])
-
-        self.num_points = c_points.shape[0]
-        self.z_scan_step = np.unique(c_points[:, 2]).shape[0]
-
-        return c_points
 
     def points3D_arrays(self, x_lin: ndarray, y_lin: ndarray, z_lin: ndarray, visualize: bool = True) -> ndarray:
         """
@@ -187,7 +168,7 @@ class InverseTriangulation:
         # Convert bytes to GB
         return total_memory / (1024 ** 3)
 
-    def transform_gcs2ccs(self, points_3d, cam_name):
+    def transform_gcs2ccs(self, points_3d, cam_name, add_dist=False):
         """
         Transform Global Coordinate System (xg, yg, zg)
          to Camera's Coordinate System (xc, yc, zc) and transform to Image's plane (uv)
@@ -250,12 +231,14 @@ class InverseTriangulation:
             del xyz_ccs  # Immediately delete
 
             # Apply distortion using the GPU
-            xyz_ccs_norm_dist = self.undistorted_points(xyz_ccs_norm.T, dist)
-            del xyz_ccs_norm  # Free memory
-
-            # Compute image points using the intrinsic matrix K
-            uv_points_batch = cp.dot(k, xyz_ccs_norm_dist.T).astype(cp.float16)
-            del xyz_ccs_norm_dist  # Free memory
+            if add_dist:
+                xyz_ccs_norm_dist = self.undistorted_points(xyz_ccs_norm.T, dist)
+                del xyz_ccs_norm  # Free memory
+                uv_points_batch = cp.dot(k, xyz_ccs_norm_dist.T).astype(cp.float16)
+            else:
+                # Compute image points using the intrinsic matrix K
+                uv_points_batch = cp.dot(k, xyz_ccs_norm).astype(cp.float16)
+                del xyz_ccs_norm  # Free memory
 
             # Debug: Check the shape of the result
             # print(f"uv_points_batch shape: {uv_points_batch.shape}")
@@ -719,13 +702,15 @@ class InverseTriangulation:
         print('Correlation process: {:.2f} s'.format(time.time() - t0))
 
         if save_points:
-            self.save_points(space_temp_correl_pt, filename='./temp_{}_{}_{}.csv'.format(self.right_images.shape[2], int(threshold*100), win_size))
+            self.save_points(space_temp_correl_pt,
+                             filename='./temp_{}_{}_{}.csv'.format(self.right_images.shape[2], int(threshold * 100),
+                                                                   win_size))
         if visualize:
             self.plot_3d_points(space_temp_correl_pt[:, 0], space_temp_correl_pt[:, 1], space_temp_correl_pt[:, 2],
                                 title="Temporal x Spatial correlation result"
                                       "\n {} imgs"
                                       "\n {} % threshold"
-                                      "\n{} win size".format(self.right_images.shape[2], threshold*100, win_size))
+                                      "\n{} win size".format(self.right_images.shape[2], threshold * 100, win_size))
         del uv_left, uv_right, spatial_id, spatial_max, std_corr
         return space_temp_correl_pt
 

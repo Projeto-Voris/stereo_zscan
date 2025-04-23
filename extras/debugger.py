@@ -177,37 +177,34 @@ def plot_zscan_phi(phi_map):
     plt.show()
 
 
-def plot_zscan_correl(correl_ar, xyz_points, list_of_points=None, nimgs=0):
-    z_size = np.unique(xyz_points[:, 2]).shape[0]
+def plot_zscan_correl(correl_ar, list_of_points=None, nimgs=10, title='Title'):
 
-    if list_of_points is None:
-        list_of_points = np.arange(np.unique(xyz_points[:, 0]).shape[0])
+    z_size = 1000
 
-        # Create a figure with 2 subplots (1 row, 2 columns)
-        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(16, 9))
-        plt.title('Correlation for {} images'.format(nimgs))
-        # First graph
-        for k in range(xyz_points.shape[0] // z_size):
-            if k < xyz_points.shape[0] // (2 * z_size):
-                ax1.plot(correl_ar[k * z_size:(k + 1) * z_size], label="{}".format(k))
-                ax1.set_xlabel('z steps')
-                ax1.set_ylabel('correlation [%]')
-                circle = plt.Circle((np.argmin(correl_ar[k]), np.min(correl_ar[k])), 0.05, color='r', fill=False, lw=2)
-                ax1.add_patch(circle)  # Add circle to the plot
-                ax1.grid(True)
-                # ax1.legend()
-            if k >= xyz_points.shape[0] // (2 * z_size):
-                ax2.plot(correl_ar[k * z_size:(k + 1) * z_size], label="{}".format(k))
-                ax2.set_xlabel('z steps')
-                ax2.set_ylabel('correlation [%]')
-                circle = plt.Circle((np.argmin(correl_ar[k]), np.min(correl_ar[k])), 0.05, color='r', fill=False, lw=2)
-                ax2.add_patch(circle)  # Add circle to the plot
-                ax2.grid(True)
-                # ax2.legend()
+    # Create a figure with 2 subplots (1 row, 2 columns)
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(16, 9))
+    plt.title('{} \n {} images'.format(title, nimgs))
+    # First graph
+    for k in range(correl_ar.shape[0] // z_size):
+        if k < correl_ar.shape[0] // (2 * z_size):
+            ax1.plot(correl_ar[k * z_size:(k + 1) * z_size], label="{}".format(k))
+            ax1.set_xlabel('z steps')
+            ax1.set_ylabel('correlation [%]')
+            circle = plt.Circle((np.argmin(correl_ar[k]), np.min(correl_ar[k])), 0.05, color='r', fill=False, lw=2)
+            ax1.add_patch(circle)  # Add circle to the plot
+            ax1.grid(True)
+            # ax1.legend()
+        if k >= correl_ar.shape[0] // (2 * z_size):
+            ax2.plot(correl_ar[k * z_size:(k + 1) * z_size], label="{}".format(k))
+            ax2.set_xlabel('z steps')
+            ax2.set_ylabel('correlation [%]')
+            circle = plt.Circle((np.argmin(correl_ar[k]), np.min(correl_ar[k])), 0.05, color='r', fill=False, lw=2)
+            ax2.add_patch(circle)  # Add circle to the plot
+            ax2.grid(True)
+            # ax2.legend()
 
-        # Adjust layout to prevent overlap
-        plt.tight_layout()
-        plt.show()
+    # Adjust layout to prevent overlap
+    plt.tight_layout()
 
 
 def plot_3d_points(x, y, z, color=None, title='Plot 3D of max correlation points'):
@@ -373,7 +370,7 @@ def plot_points_on_image(image, points, color=(0, 255, 0), radius=5, thickness=1
     """
     # full_image = np.ones((np.max(points[:, 0]) + 1, np.max(points[:, 1]) + 1, 3), dtype=int)
     output_image = cv2.cvtColor(np.uint8(image), cv2.COLOR_GRAY2BGR)
-    for (u, v, _) in points.T:
+    for (u, v) in points.T:
         # Draw a circle for each point on the image
         cv2.circle(output_image, (int(u), int(v)), radius, color, thickness)
     return output_image
@@ -405,23 +402,32 @@ def mask_images(left_image, right_image, thres=180):
 
     return mask_left, mask_right
 
-
 def main():
-    path = 'images/SM3-20240815_1'
-    left_images = os.listdir(os.path.join(path, 'left'))
-    right_images = os.listdir(os.path.join(path, 'right'))
+    # for i in range(3):
+    #     for j in range(3):
+            # print(i, j)
+        # file = '/home/daniel/reshaped_2pts_{}_{}.txt'.format(i, j)
+        file = '/home/daniel/reshaped_1pts.txt'
+        # if not os.path.exists(file):
+        #     print('File not found')
+        #     continue
+        i=j=0
+        # Load the data from the CSV file
+        data = load_array_from_csv(file, delimiter=',')
+        print('Data readed from file, size: ', data.shape)
+        
 
-    left_image = cv2.imread(os.path.join(path, 'left', left_images[0]), 0)
-    right_image = cv2.imread(os.path.join(path, 'right', right_images[0]), 0)
+        # Filter data_arr to only include arrays that contain values above 0.5
+        data_arr = np.array_split(data, data.shape[0] // 1000)
+        filtered_data_arr = [arr for arr in data_arr if np.any(arr > 0.5)]
+        filtered = np.hstack(filtered_data_arr)
+        print('Filtered data size: ', filtered.shape)
 
-    # plot_hist(left_image, right_image)
+        plot_zscan_correl(data, title='All data{},{}'.format(i, j))
+        plot_zscan_correl(filtered, title='Filtered data {},{}'.format(i, j))
+        plt.show()
 
-    masked_l, masked_r = mask_images(left_image, right_image, thres=170)
 
-    show_stereo_images(left_image, right_image, name='original')
-    show_stereo_images(masked_l, masked_r, name='masked')
-
-    cv2.destroyAllWindows()
 
 
 if __name__ == '__main__':

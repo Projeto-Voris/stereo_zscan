@@ -11,9 +11,9 @@ from extras.project_points import read_images, points3d_cube
 
 
 def main():
-    yaml_file = 'cfg/SM3_20250203.yaml'
-    images_path = '/home/daniel/Pictures/20250205'
-    Nimg = 40
+    yaml_file = 'cfg/20250212.yaml'
+    images_path = '/home/daniel/Insync/daniel.regner@labmetro.ufsc.br/Google Drive - Shared drives/VORIS  - Equipe/Sistema de Medição 3 - Stereo Ativo - Projeção Laser/Imagens/20250228 - SM3 big speckle'
+    Nimg = 30
     method = 'spatial'
     # fringe_image_name = '016.csv'
     t0 = time.time()
@@ -47,7 +47,7 @@ def main():
         if method == 'spatial':
 
             correl_points = Zscan.spat_temp_correl_process(points_3d=points_3d, visualize=True, save_points=False,
-                                                           win_size=11, threshold=0.8)
+                                                           win_size=15, threshold=0.6)
             print('First Correl {}'.format(round(time.time() - t3, 2)))
             t4 = time.time()
 
@@ -60,7 +60,7 @@ def main():
             print('Create second meshgrid pcl: {} s'.format(round(time.time() - t4, 2)))
             t4 = time.time()
             correl_points = Zscan.spat_temp_correl_process(points_3d=points_3d_2, visualize=True, save_points=True,
-                                                           win_size=15, threshold=0.8)
+                                                           win_size=15, threshold=0.6)
             print('Second Correl {}'.format(round(time.time() - t4, 2)))
         else:
 

@@ -4,9 +4,9 @@ import os
 import cupy as cp
 import gc
 
-from extras import rectify_matrix
+# from extras import rectify_matrix
 from extras import debugger
-
+from include.InverseTriangulation import InverseTriangulation
 
 def points3d_cube_gpu(x_lim=(-5, 5), y_lim=(-5, 5), z_lim=(0, 5), xy_step=1.0, z_step=1.0, visualize=True, max_memory_gb=4):
     """
@@ -329,7 +329,7 @@ def read_images(path, images_list, n_images, visualize=False, CLAHE=False):
     """
     # Read all images using list comprehension
     if CLAHE:
-        clahe = cv2.createCLAHE(clipLimit=11.0, tileGridSize=(21, 21))
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(15, 15))
         images = [clahe.apply(cv2.imread(os.path.join(path, str(img_name)), cv2.IMREAD_GRAYSCALE))
                   for img_name in images_list[0:n_images]]
     else:
@@ -351,29 +351,28 @@ def read_images(path, images_list, n_images, visualize=False, CLAHE=False):
 
 def main():
     # Paths for yaml file and images
-    yaml_file = '../cfg/SM3_20250203.yaml'
+    yaml_file = '../cfg/20250212.yaml'
     # images_path = 'images/SM4-20241004 -calib 25x25'
-    images_path = '/home/daniel/Insync/daniel.regner@labmetro.ufsc.br/Google Drive - Shared drives/VORIS  - Equipe/Sistema de Medição 3 - Stereo Ativo - Projeção Laser/Imagens/Calibração/SM3_20250203'
-    Nimg = 5
+    images_path = '/home/daniel/Insync/daniel.regner@labmetro.ufsc.br/Google Drive - Shared drives/VORIS - Media/Experimentos/SM3/Calibração/SM3 - 20250212 - 25x25'
+    # images_path = '/home/daniel/Pictures/sm3'
+    Nimg = 10
+    Zscan = InverseTriangulation(yaml_file=yaml_file)
     # # Identify all images from path file
     left_images = read_images(os.path.join(images_path, 'left', ),
-                              sorted(os.listdir(os.path.join(images_path, 'left'))), n_images=Nimg, CLAHE=False)
+                              sorted(os.listdir(os.path.join(images_path, 'left'))), n_images=Nimg, CLAHE=True, visualize=False)
     right_images = read_images(os.path.join(images_path, 'right', ),
-                               sorted(os.listdir(os.path.join(images_path, 'right'))), n_images=Nimg, CLAHE=False)
+                               sorted(os.listdir(os.path.join(images_path, 'right'))), n_images=Nimg, CLAHE=False, visualize=False)
 
-    # Read file containing all calibration qparameters from stereo system
-    Kl, Dl, Rl, Tl, Kr, Dr, Rr, Tr, R, T = rectify_matrix.load_camera_params(yaml_file=yaml_file)
-    # xyz_points = z_scan_temporal.points3d_cube(xy=(-1, 1), z=(0, 1), xy_step=0.1, z_step=0.5, visualize=False)
+    Zscan.read_images(left_imgs=left_images, right_imgs=right_images, undist=False)
 
-    xy_points = points3d_cube(x_lim=(-200, 250), y_lim=(-100, 200), z_lim=(-0, 1), xy_step=10, z_step=1,
-                                             visualize=False)
+    points3d = Zscan.points3d(x_lim=(-200,600), y_lim=(-200,600), z_lim=(0,100), xy_step=25, z_step=1, visualize=True)
+    uv_left = Zscan.transform_gcs2ccs(points_3d=points3d, cam_name='left', add_dist=True)
+    uv_right = Zscan.transform_gcs2ccs(points_3d=points3d, cam_name='right', add_dist=False)
 
-    uv_points_L = gcs2ccs(xy_points, Kl, Dl, Rl, Tl)
-    uv_points_R = gcs2ccs(xy_points, Kr, Dr, Rr, Tr)
-    output_image_L = debugger.plot_points_on_image(image=left_images[:, :, 1], points=uv_points_L, color=(0, 255, 0),
+    output_image_L = debugger.plot_points_on_image(image=cp.asnumpy(Zscan.left_images[:, :, 0]), points=uv_left, color=(0, 255, 0),
                                                    radius=5,
                                                    thickness=1)
-    output_image_R = debugger.plot_points_on_image(image=right_images[:, :, 1], points=uv_points_R, color=(0, 255, 0),
+    output_image_R = debugger.plot_points_on_image(image=cp.asnumpy(Zscan.right_images[:, :, 0]), points=uv_right, color=(0, 255, 0),
                                                    radius=5,
                                                    thickness=1)
 
