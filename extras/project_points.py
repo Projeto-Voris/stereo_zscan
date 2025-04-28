@@ -4,8 +4,6 @@ import os
 import cupy as cp
 import gc
 
-# from extras import rectify_matrix
-from extras import debugger
 from include.InverseTriangulation import InverseTriangulation
 
 def points3d_cube_gpu(x_lim=(-5, 5), y_lim=(-5, 5), z_lim=(0, 5), xy_step=1.0, z_step=1.0, visualize=True, max_memory_gb=4):
@@ -349,38 +347,4 @@ def read_images(path, images_list, n_images, visualize=False, CLAHE=False):
     return images
 
 
-def main():
-    # Paths for yaml file and images
-    yaml_file = '../cfg/20250212.yaml'
-    # images_path = 'images/SM4-20241004 -calib 25x25'
-    images_path = '/home/daniel/Insync/daniel.regner@labmetro.ufsc.br/Google Drive - Shared drives/VORIS - Media/Experimentos/SM3/Calibração/SM3 - 20250212 - 25x25'
-    # images_path = '/home/daniel/Pictures/sm3'
-    Nimg = 10
-    Zscan = InverseTriangulation(yaml_file=yaml_file)
-    # # Identify all images from path file
-    left_images = read_images(os.path.join(images_path, 'left', ),
-                              sorted(os.listdir(os.path.join(images_path, 'left'))), n_images=Nimg, CLAHE=True, visualize=False)
-    right_images = read_images(os.path.join(images_path, 'right', ),
-                               sorted(os.listdir(os.path.join(images_path, 'right'))), n_images=Nimg, CLAHE=False, visualize=False)
 
-    Zscan.read_images(left_imgs=left_images, right_imgs=right_images, undist=False)
-
-    points3d = Zscan.points3d(x_lim=(-200,600), y_lim=(-200,600), z_lim=(0,100), xy_step=25, z_step=1, visualize=True)
-    uv_left = Zscan.transform_gcs2ccs(points_3d=points3d, cam_name='left', add_dist=True)
-    uv_right = Zscan.transform_gcs2ccs(points_3d=points3d, cam_name='right', add_dist=False)
-
-    output_image_L = debugger.plot_points_on_image(image=cp.asnumpy(Zscan.left_images[:, :, 0]), points=uv_left, color=(0, 255, 0),
-                                                   radius=5,
-                                                   thickness=1)
-    output_image_R = debugger.plot_points_on_image(image=cp.asnumpy(Zscan.right_images[:, :, 0]), points=uv_right, color=(0, 255, 0),
-                                                   radius=5,
-                                                   thickness=1)
-
-    debugger.show_stereo_images(output_image_L, output_image_R, "Remaped points")
-    cv2.waitKey(0)
-    # print('wait')
-
-
-if __name__ == '__main__':
-    main()
-    cv2.destroyAllWindows()

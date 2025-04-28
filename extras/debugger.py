@@ -402,33 +402,33 @@ def mask_images(left_image, right_image, thres=180):
 
     return mask_left, mask_right
 
-def main():
-    # for i in range(3):
-    #     for j in range(3):
-            # print(i, j)
-        # file = '/home/daniel/reshaped_2pts_{}_{}.txt'.format(i, j)
-        file = '/home/daniel/reshaped_1pts.txt'
-        # if not os.path.exists(file):
-        #     print('File not found')
-        #     continue
-        i=j=0
-        # Load the data from the CSV file
-        data = load_array_from_csv(file, delimiter=',')
-        print('Data readed from file, size: ', data.shape)
+# def main():
+#     # for i in range(3):
+#     #     for j in range(3):
+#             # print(i, j)
+#         # file = '/home/daniel/reshaped_2pts_{}_{}.txt'.format(i, j)
+#         file = '/home/daniel/reshaped_1pts.txt'
+#         # if not os.path.exists(file):
+#         #     print('File not found')
+#         #     continue
+#         i=j=0
+#         # Load the data from the CSV file
+#         data = load_array_from_csv(file, delimiter=',')
+#         print('Data readed from file, size: ', data.shape)
         
 
-        # Filter data_arr to only include arrays that contain values above 0.5
-        data_arr = np.array_split(data, data.shape[0] // 1000)
-        filtered_data_arr = [arr for arr in data_arr if np.any(arr > 0.5)]
-        filtered = np.hstack(filtered_data_arr)
-        print('Filtered data size: ', filtered.shape)
+#         # Filter data_arr to only include arrays that contain values above 0.5
+#         data_arr = np.array_split(data, data.shape[0] // 1000)
+#         filtered_data_arr = [arr for arr in data_arr if np.any(arr > 0.5)]
+#         filtered = np.hstack(filtered_data_arr)
+#         print('Filtered data size: ', filtered.shape)
 
-        plot_zscan_correl(data, title='All data{},{}'.format(i, j))
-        plot_zscan_correl(filtered, title='Filtered data {},{}'.format(i, j))
-        plt.show()
-
-
+#         plot_zscan_correl(data, title='All data{},{}'.format(i, j))
+#         plot_zscan_correl(filtered, title='Filtered data {},{}'.format(i, j))
+#         plt.show()
 
 
-if __name__ == '__main__':
-    main()
+
+
+# if __name__ == '__main__':
+#     main()

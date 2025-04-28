@@ -6,15 +6,13 @@ import matplotlib.pyplot as plt
 import time
 import gc
 from cupyx.fallback_mode.fallback import ndarray
-from extras.debugger import plot_surf
-
+import os
 
 class InverseTriangulation:
     def __init__(self, yaml_file):
 
-        self.yaml_file = yaml_file
-        self.left_images = ndarray([])
-        self.right_images = ndarray([])
+        self.left_images = cp.array([])
+        self.right_images = cp.array([])
 
         # Initialize all camera parameters in a single nested dictionary
         self.camera_params = {
@@ -22,25 +20,73 @@ class InverseTriangulation:
             'right': {'kk': np.array([]), 'kc': np.array([]), 'r': np.array([]), 't': np.array([])},
             'stereo': {'R': np.array([]), 'T': np.array([])}
         }
+        self.read_yaml_file(yaml_file)
 
-        self.read_yaml_file()
 
         self.z_scan_step = None
         self.num_points = None
-        self.max_gpu_usage = self.set_datalimit() // 2
+        self.max_gpu_usage = self.set_datalimit() // 3
 
         # self.uv_left = []
         # self.uv_right = []
 
-    def read_images(self, left_imgs, right_imgs, undist=True):
-        if len(left_imgs) != len(right_imgs):
-            raise Exception("Number of images do not match")
-        if undist:
-            for k in range(left_imgs.shape[2]):
-                left_imgs[:, :, k] = self.remove_img_distortion(left_imgs[:, :, k], 'left')
-                right_imgs[:, :, k] = self.remove_img_distortion(right_imgs[:, :, k], 'right')
-        self.left_images = cp.asarray(left_imgs)
-        self.right_images = cp.asarray(right_imgs)
+    def read_yaml_file(self, yaml_file):
+        """
+        Read YAML file to extract cameras parameters
+        """
+        # Load the YAML file
+        with open(yaml_file) as file:  # Replace with your file path
+            params = yaml.safe_load(file)
+
+            # Parse the matrices
+        self.camera_params['left']['kk'] = np.array(params['camera_matrix_left'], dtype=np.float64)
+        self.camera_params['left']['kc'] = np.array(params['dist_coeffs_left'], dtype=np.float64)
+        self.camera_params['left']['r'] = np.array(params['rot_matrix_left'], dtype=np.float64)
+        self.camera_params['left']['t'] = np.array(params['t_left'], dtype=np.float64)
+
+        self.camera_params['right']['kk'] = np.array(params['camera_matrix_right'], dtype=np.float64)
+        self.camera_params['right']['kc'] = np.array(params['dist_coeffs_right'], dtype=np.float64)
+        self.camera_params['right']['r'] = np.array(params['rot_matrix_right'], dtype=np.float64)
+        self.camera_params['right']['t'] = np.array(params['t_right'], dtype=np.float64)
+
+        self.camera_params['stereo']['R'] = np.array(params['R'], dtype=np.float64)
+        self.camera_params['stereo']['T'] = np.array(params['T'], dtype=np.float64)
+
+    def read_images(self, path, images_list, n_imgs):
+        """
+        Read all images from the specified path and stack them into a single array.
+        Parameters:
+            path: (string) path to images folder.
+            images_list: (list of strings) list of image names.
+        Returns:
+            images: (height, width, number of images) array of images.
+        """
+
+        # Read all images using list comprehension
+        images = [cv2.imread(os.path.join(path, str(img_name)), cv2.IMREAD_GRAYSCALE)
+                    for img_name in images_list[0:n_imgs]]
+        # images = np.stack(images, axis=-1).astype(np.uint8)  # Convert to uint8
+                            
+        return images
+
+    def convert_images(self, left_imgs, right_imgs, apply_clahe=False, tile=11, climp=5.0, undist=False):
+        """
+        Convert images to CuPy arrays for GPU processing.
+        Optionally apply CLAHE (Contrast Limited Adaptive Histogram Equalization).
+        """
+        if apply_clahe:
+            clahe = cv2.createCLAHE(clipLimit=climp, tileGridSize=(tile, tile))
+            if undist:
+                left_imgs = [self.remove_img_distortion(clahe.apply(img), 'left') for img in left_imgs]
+                right_imgs = [self.remove_img_distortion(clahe.apply(img), 'right') for img in right_imgs]
+            else:
+                left_imgs = [clahe.apply(img) for img in left_imgs]
+                right_imgs = [clahe.apply(img) for img in right_imgs]
+
+
+        self.left_images = cp.asarray(np.stack(left_imgs, axis=-1)).astype(cp.uint8)
+        self.right_images = cp.asarray(np.stack(right_imgs, axis=-1)).astype(cp.uint8)
+        return True
 
     def remove_img_distortion(self, img, camera):
         return cv2.undistort(img, self.camera_params[camera]['kk'], self.camera_params[camera]['kc'])
@@ -73,88 +119,55 @@ class InverseTriangulation:
         self.z_scan_step = np.unique(c_points[:, 2]).shape[0]
 
         return c_points.astype(np.float16)
-
-    def points3D_arrays(self, x_lin: ndarray, y_lin: ndarray, z_lin: ndarray, visualize: bool = True) -> ndarray:
+    
+    def point3d_split(self, x_lin, y_lin, z_lin, visualize=False):
         """
-        Crete 3D meshgrid of points based on input vectors of x, y and z
-        :param x_lin: linear space of x points
-        :param y_lin: linear space of y points
-        :param z_lin: linear space of z points
-        :param visualize: If true plot a 3d graph of points
-        :return: 3D meshgrid points size (N,3) where N = len(x)*len(y)*len(z)
-        """
+            Create a 3D space of combination from linear arrays of X Y Z
+            Parameters:
+                x_lim: Begin and end of linear space of X
+                y_lim: Begin and end of linear space of Y
+                z_lim: Begin and end of linear space of Z
+                xy_step: Step size between X and Y
+                z_step: Step size between Z and X
+                visualize: Visualize the 3D space
+            Returns:
+                cube_points: combination of X Y and Z
+            """
         mg1, mg2, mg3 = np.meshgrid(x_lin, y_lin, z_lin, indexing='ij')
-        points = np.stack([mg1, mg2, mg3], axis=-1).reshape(-1, 3)
+
+        c_points = np.stack([mg1, mg2, mg3], axis=-1).reshape(-1, 3)
 
         if visualize:
-            self.plot_3d_points(x=points[:, 0], y=points[:, 1], z=points[:, 2])
+            self.plot_3d_points(x=c_points[:, 0], y=c_points[:, 1], z=c_points[:, 2])
 
-        self.num_points = points.shape[0]
-        self.z_scan_step = np.unique(points[:, 2]).shape[0]
+        self.num_points = c_points.shape[0]
+        self.z_scan_step = np.unique(c_points[:, 2]).shape[0]
 
-        return points
+        return c_points.astype(np.float16)
 
-    def plot_3d_points(self, x, y, z, color=None, title='Plot 3D of max correlation points'):
+    def kernel_3d(self, kernel_size=3, zlim=(0,10), dx=1, dy=1, dz=1):
         """
-        Plot 3D points as scatter points where color is based on Z value
+        Create a 3D kernel for correlation
         Parameters:
-            x: array of x positions
-            y: array of y positions
-            z: array of z positions
-            color: Vector of point intensity grayscale
+            kernel_size: Size of the kernel (default is 3).
+            dx: Step size in the x direction (default is 1).
+            dy: Step size in the y direction (default is 1).
+            dz: Step size in the z direction (default is 1).
+        Returns:
+            kernel: 3D kernel for correlation.
         """
-        if color is None:
-            color = z
-        cmap = 'viridis'
-        # Plot the 3D scatter plot
-        fig = plt.figure(figsize=(10, 8))
-        ax = fig.add_subplot(111, projection='3d')
-        ax.title.set_text(title)
+        x = np.arange(-kernel_size // 2, kernel_size // 2 + 1, dx)
+        y = np.arange(-kernel_size // 2, kernel_size // 2 + 1, dy)
+        z = np.arange(zlim[0], zlim[1], dz)  # Create a range for Z based on zlim
 
-        scatter = ax.scatter(x, y, z, c=color, cmap=cmap, marker='o')
-        # ax.set_zlim(0, np.max(z))
-        colorbar = plt.colorbar(scatter, ax=ax, shrink=0.5, aspect=5)
-        colorbar.set_label('Z Value Gradient')
+        # Create a 3D grid of points
+        xx, yy, zz = np.meshgrid(x, y, z, indexing='ij')
 
-        # Add labels
-        ax.set_xlabel('X [mm]')
-        ax.set_ylabel('Y [mm]')
-        ax.set_zlabel('Z [mm]')
-        ax.set_aspect('equal', adjustable='box')
-        plt.show()
-
-    def read_yaml_file(self):
-        """
-        Read YAML file to extract cameras parameters
-        """
-        # Load the YAML file
-        with open(self.yaml_file) as file:  # Replace with your file path
-            params = yaml.safe_load(file)
-
-            # Parse the matrices
-        self.camera_params['left']['kk'] = np.array(params['camera_matrix_left'], dtype=np.float64)
-        self.camera_params['left']['kc'] = np.array(params['dist_coeffs_left'], dtype=np.float64)
-        self.camera_params['left']['r'] = np.array(params['rot_matrix_left'], dtype=np.float64)
-        self.camera_params['left']['t'] = np.array(params['t_left'], dtype=np.float64)
-
-        self.camera_params['right']['kk'] = np.array(params['camera_matrix_right'], dtype=np.float64)
-        self.camera_params['right']['kc'] = np.array(params['dist_coeffs_right'], dtype=np.float64)
-        self.camera_params['right']['r'] = np.array(params['rot_matrix_right'], dtype=np.float64)
-        self.camera_params['right']['t'] = np.array(params['t_right'], dtype=np.float64)
-
-        self.camera_params['stereo']['R'] = np.array(params['R'], dtype=np.float64)
-        self.camera_params['stereo']['T'] = np.array(params['T'], dtype=np.float64)
-
-    def save_points(self, data, filename, delimiter=','):
-        """
-        Save a 2D NumPy array to a CSV file.
-
-        :param array: 2D numpy array
-        :param filename: Output CSV filename
-        """
-        # Save the 2D array as a CSV file
-        np.savetxt(filename, data, delimiter=delimiter)
-        print(f"Array saved to {filename}")
+        # Stack the grid points into a single array of shape (N, 3)
+        kernel_points = np.stack([xx.ravel(), yy.ravel(), zz.ravel()], axis=-1)
+        self.num_points = kernel_points.shape[0]
+        self.z_scan_step = z.shape[0]
+        return kernel_points        
 
     def set_datalimit(self):
         """
@@ -168,7 +181,7 @@ class InverseTriangulation:
         # Convert bytes to GB
         return total_memory / (1024 ** 3)
 
-    def transform_gcs2ccs(self, points_3d, cam_name, add_dist=False):
+    def transform_gcs2ccs(self, points_3d, cam_name, undist=False):
         """
         Transform Global Coordinate System (xg, yg, zg)
          to Camera's Coordinate System (xc, yc, zc) and transform to Image's plane (uv)
@@ -231,10 +244,11 @@ class InverseTriangulation:
             del xyz_ccs  # Immediately delete
 
             # Apply distortion using the GPU
-            if add_dist:
+            if undist:
                 xyz_ccs_norm_dist = self.undistorted_points(xyz_ccs_norm.T, dist)
                 del xyz_ccs_norm  # Free memory
                 uv_points_batch = cp.dot(k, xyz_ccs_norm_dist.T).astype(cp.float16)
+                del xyz_ccs_norm_dist  # Free memory
             else:
                 # Compute image points using the intrinsic matrix K
                 uv_points_batch = cp.dot(k, xyz_ccs_norm).astype(cp.float16)
@@ -249,15 +263,6 @@ class InverseTriangulation:
             # Free GPU memory after processing each batch
             cp.get_default_memory_pool().free_all_blocks()
             gc.collect()
-
-        # # Ensure consistent dimensions when concatenating batches
-        # try:
-        #     # Concatenate all batches along axis 0 (rows)
-        #     uv_points = np.hstack(uv_points_list)  # Use np.hstack for matching shapes
-
-        # except ValueError as e:
-        #     print(f"Error during concatenation: {e}")
-        #     raise
 
         return uv_points_list
 
@@ -301,7 +306,11 @@ class InverseTriangulation:
         cp.get_default_memory_pool().free_all_blocks()
 
         return distorted_points
-
+            # y_indices_l = cp.clip(y1_l[:, :, None] + offsets[None, :], 0, height - window_size)
+            # x_indices_l = cp.clip(x1_l[:, :, None] + offsets[None, :], 0, width - window_size)
+            # y_indices_r = cp.clip(y1_r[:, :, None] + offsets[None, :], 0, height - window_size)
+            # x_indices_r = cp.clip(x1_r[:, :, None] + offsets[None, :], 0, width - window_size)
+    
     def bi_interpolation(self, images, uv_points, window_size=3):
         """
         Perform bilinear interpolation on a stack of images at specified uv_points on the GPU.
@@ -341,8 +350,8 @@ class InverseTriangulation:
             uv_batch = uv_points[:, i:end]
 
             # Compute integer and fractional parts of UV coordinates
-            x = uv_batch[0].astype(cp.int32)
-            y = uv_batch[1].astype(cp.int32)
+            x = uv_batch[0].astype(cp.float16)
+            y = uv_batch[1].astype(cp.float16)
 
             x1 = cp.clip(cp.floor(x).astype(cp.int32), 0, width - 1)
             y1 = cp.clip(cp.floor(y).astype(cp.int32), 0, height - 1)
@@ -371,6 +380,7 @@ class InverseTriangulation:
                 # Store results in GPU arrays
                 interpolated[i:end, k] = interpolated_batch
                 std[i:end, k] = std_batch
+
             del p11, p12, p21, p22, std_batch, interpolated_batch
         cp.get_default_memory_pool().free_all_blocks()
         gc.collect()
@@ -378,176 +388,10 @@ class InverseTriangulation:
         # interpolated_cpu = cp.asnumpy(interpolated_gpu)
         # std_cpu = cp.asnumpy(std_gpu)
 
-        if images.shape[2] == 1:  # Flatten output for single image
-            interpolated_cpu = interpolated[:, 0]
-            std_cpu = std[:, 0]
 
         return interpolated, std
 
-    def phase_map(self, interp_left, interp_right, debug=False):
-        """
-        Identify minimum phase map value
-        Parameters:
-            interp_left: left interpolated points
-            interp_right: right interpolated points
-            debug: if true, visualize phi_map array
-        Returns:
-            phi_min_id: indices of minimum phase map values.
-        """
-        phi_map = []
-        phi_min_id = []
-        for k in range(self.num_points // self.z_scan_step):
-            diff_phi = np.abs(interp_left[self.z_scan_step * k:(k + 1) * self.z_scan_step]
-                              - interp_right[self.z_scan_step * k:(k + 1) * self.z_scan_step])
-            phi_min_id.append(np.argmin(diff_phi) + k * self.z_scan_step)
-            if debug:
-                phi_map.append(diff_phi)
-        if debug:
-            plt.figure()
-            plt.plot(phi_map)
-            plt.show()
-        return phi_min_id
-
-    def fringe_masks(self, std_l, std_r, phi_id, uv_left, uv_right, min_thresh=0, max_thresh=1):
-        """
-        Mask from fringe process to remove outbounds points.
-        Paramenters:
-            std_l: STD interpolation image's points
-            std_r: STD interpolation image's points
-            phi_id: Indices for min phase difference
-            min_thresh: max threshold for STD
-            max_thresh: min threshold for STD
-        Returns:
-             valid_mask: Valid 3D points on image's plane
-        """
-        valid_u_l = (uv_left[0, :] >= 0) & (uv_left[0, :] < self.left_images.shape[1])
-        valid_v_l = (uv_left[1, :] >= 0) & (uv_left[1, :] < self.left_images.shape[0])
-        valid_u_r = (uv_right[0, :] >= 0) & (uv_right[0, :] < self.right_images.shape[1])
-        valid_v_r = (uv_right[1, :] >= 0) & (uv_right[1, :] < self.right_images.shape[0])
-        valid_uv = valid_u_l & valid_u_r & valid_v_l & valid_v_r
-        phi_mask = np.zeros(uv_left.shape[1], dtype=bool)
-        phi_mask[phi_id] = True
-        valid_l = (min_thresh < std_l) & (std_l < max_thresh)
-        valid_r = (min_thresh < std_r) & (std_r < max_thresh)
-
-        valid_std = valid_r & valid_l
-
-        return valid_uv & valid_std & phi_mask
-
-    def fringe_process(self, points_3d: ndarray, save_points: bool = True, visualize: bool = False) -> ndarray:
-        """
-        Zscan for stereo fringe process
-        Parameters:
-            save_points: boolean to save or not image
-            visualize: boolean to visualize result
-        :return:
-            measured_pts: Valid 3D global coordinate points
-        """
-        t0 = time.time()
-        uv_left = self.transform_gcs2ccs(points_3d, cam_name='left')
-        uv_right = self.transform_gcs2ccs(points_3d, cam_name='right')
-        inter_left, std_left = self.bi_interpolation(self.left_images, uv_left)
-        inter_right, std_right = self.bi_interpolation(self.right_images, uv_right)
-
-        phi_min_id = self.phase_map(inter_left, inter_right)
-        measured_pts = points_3d[np.asarray(phi_min_id, np.int32)]
-
-        print('Zscan result dt: {} s'.format(round(time.time() - t0), 2))
-
-        if save_points:
-            self.save_points(measured_pts, filename='./sm3_duto.csv')
-
-        if visualize:
-            self.plot_3d_points(measured_pts[:, 0], measured_pts[:, 1], measured_pts[:, 2], color=None,
-                                title="Fringe process output points")
-
-        return measured_pts
-
-    def temp_cross_correlation(self, left_Igray, right_Igray):
-        """
-        Calculate the cross-correlation between two sets of images over time using CuPy for GPU acceleration,
-        while limiting GPU memory usage and handling variable batch sizes.
-
-        Parameters:
-        left_Igray: (num_points, num_images) array of left images in grayscale.
-        right_Igray: (num_points, num_images) array of right images in grayscale.
-        Returns:
-        ho: Cross-correlation values.
-        hmax: Maximum correlation values.
-        Imax: Indices of maximum correlation values.
-        ho_ztep: List of correlation values for all Z value of each XY.
-        """
-
-        num_images = left_Igray.shape[1]  # Number of images
-
-        # Number of tested Z (this will be used as batch size)
-        num_pairs = self.num_points // self.z_scan_step  # Total number of XY points
-
-        # Estimate memory usage per point
-        bytes_per_float32 = 8
-        memory_per_point = (4 * num_images * bytes_per_float32)
-        # For left_Igray, right_Igray, and intermediate calculations
-        total_memory_required = self.num_points * memory_per_point
-
-        # Adjust the batch size based on memory limitations
-        if total_memory_required > self.max_gpu_usage * 1024 ** 3:
-            points_per_batch = int(self.max_gpu_usage * 1024 ** 3 // memory_per_point // 10)
-            # print(f"Processing {points_per_batch} points per batch due to memory limitations.")
-        else:
-            points_per_batch = self.num_points  # Process all points at once
-
-        # Initialize outputs with the correct data type (float32 for memory efficiency)
-        ho = cp.empty(self.num_points, dtype=cp.float32)
-
-        # Preallocate ho_ztep only if necessary
-        ho_ztep = cp.empty((self.z_scan_step, num_pairs),
-                           dtype=cp.float32)  # Store values for each Z value tested per XY pair
-
-        # Process images in chunks based on the adjusted points_per_batch size
-        for i in range(0, self.num_points, points_per_batch):
-            end = min(i + points_per_batch, self.num_points)
-
-            # Load only the current batch into the GPU
-            batch_left = cp.asarray(left_Igray[i:end], dtype=cp.float32)
-            batch_right = cp.asarray(right_Igray[i:end], dtype=cp.float32)
-
-            # Debug: Check the batch size
-            # print(f"Processing batch {i // points_per_batch + 1}, size: {batch_size}")
-
-            # Mean values along time (for the current batch)
-            left_mean_batch = cp.mean(batch_left, axis=1, keepdims=True)
-            right_mean_batch = cp.mean(batch_right, axis=1, keepdims=True)
-
-            # Calculate the numerator and denominator for the correlation
-            num = cp.sum((batch_left - left_mean_batch) * (batch_right - right_mean_batch), axis=1)
-            left_sq_diff = cp.sum((batch_left - left_mean_batch) ** 2, axis=1)
-            right_sq_diff = cp.sum((batch_right - right_mean_batch) ** 2, axis=1)
-
-            den = cp.sqrt(left_sq_diff * right_sq_diff)
-            ho_batch = num / cp.maximum(den, 1e-10)
-
-            # Store the results for this batch
-            ho[i:end] = ho_batch
-
-            # Release memory after processing each batch
-            del batch_left, batch_right, left_mean_batch, right_mean_batch, ho_batch
-            cp.get_default_memory_pool().free_all_blocks()
-            gc.collect()
-
-        hmax = cp.empty(num_pairs, dtype=cp.float32)
-        Imax = cp.empty(num_pairs, dtype=cp.int64)
-        # Calculate hmax and Imax for this batch
-        for k in range(self.num_points // self.z_scan_step):
-            start_idx = k * self.z_scan_step
-            end_idx = (k + 1) * self.z_scan_step
-            ho_range = ho[start_idx:end_idx]
-
-            hmax[k] = cp.nanmax(ho_range)
-            Imax[k] = cp.nanargmax(ho_range) + k * self.z_scan_step
-
-        return cp.asnumpy(ho), cp.asnumpy(hmax), cp.asnumpy(Imax), cp.asnumpy(ho_ztep)
-
-    def spatial_correl(self, uv_left, uv_right, window_size=3):
+    def spatial_correl(self, uv_left, uv_right, window_size=3, save_points=False, name_file='reshaped_corr'):
         """
         Compute spatial correlation for patches around specified points across all images.
 
@@ -569,9 +413,6 @@ class InverseTriangulation:
         spatial_id : np.ndarray
             Index of the maximum correlation value for each point.
         """
-        # Convert images to CuPy arrays
-        # self.left_images = self.left_images
-        # self.right_images = self.right_images
 
         half_window = window_size // 2
         height, width, num_images = self.left_images.shape
@@ -643,9 +484,13 @@ class InverseTriangulation:
         spatial_max = cp.nanmax(reshaped_corr, axis=1)
         spatial_id = cp.nanargmax(reshaped_corr, axis=1) + cp.arange(reshaped_corr.shape[0]) * self.z_scan_step
         std_corr = std_corr[spatial_id]
-        # plot_surf(uv_left[spatial_id], std_corr)
 
-        # Return as NumPy arrays
+        # Save reshaped correlation as numpy vector to a text file
+        if save_points:
+            reshaped_corr_cpu = cp.asnumpy(reshaped_corr)
+            np.savetxt('{}.txt'.format(name_file), reshaped_corr_cpu.flatten(), fmt='%.6f')
+
+        # Return as Cupy array
         return spatial_id, spatial_max, std_corr
 
     def correl_mask(self, std_correl, correl_max, std_thresh, correl_thresh):
@@ -668,7 +513,76 @@ class InverseTriangulation:
 
         return correl_mask & std_mask
 
-    def spat_temp_correl_process(self, points_3d, win_size=3, threshold=0.8, save_points=True, visualize=False):
+    def temp_cross_correlation(self, left_Igray, right_Igray):
+        """
+        Calculate the cross-correlation between two sets of images over time using CuPy for GPU acceleration,
+        while limiting GPU memory usage and handling variable batch sizes.
+
+        Parameters:
+        left_Igray: (num_points, num_images) array of left images in grayscale.
+        right_Igray: (num_points, num_images) array of right images in grayscale.
+        Returns:
+        ho: Cross-correlation values.
+        Imax: Indices of maximum correlation values.
+        """
+
+        num_images = left_Igray.shape[1]  # Number of images
+
+        # Number of tested Z (this will be used as batch size)
+        num_pairs = self.num_points // self.z_scan_step  # Total number of XY points
+
+        # Estimate memory usage per point
+        bytes_per_float32 = 8
+        memory_per_point = (4 * num_images * bytes_per_float32)
+        # For left_Igray, right_Igray, and intermediate calculations
+        total_memory_required = self.num_points * memory_per_point
+
+        # Adjust the batch size based on memory limitations
+        if total_memory_required > self.max_gpu_usage * 1024 ** 3:
+            points_per_batch = int(self.max_gpu_usage * 1024 ** 3 // memory_per_point // 10)
+            # print(f"Processing {points_per_batch} points per batch due to memory limitations.")
+        else:
+            points_per_batch = self.num_points  # Process all points at once
+
+        # Initialize outputs with the correct data type (float32 for memory efficiency)
+        ho = cp.empty(left_Igray.shape[0], dtype=cp.float32)
+
+
+        # Process images in chunks based on the adjusted points_per_batch size
+        for i in range(0, self.num_points, points_per_batch):
+            end = min(i + points_per_batch, self.num_points)
+
+            # Load only the current batch into the GPU
+            batch_left = cp.asarray(left_Igray[i:end], dtype=cp.float32)
+            batch_right = cp.asarray(right_Igray[i:end], dtype=cp.float32)
+
+            # Debug: Check the batch size
+            # print(f"Processing batch {i // points_per_batch + 1}, size: {batch_size}")
+
+            # Mean values along time (for the current batch)
+            left_mean_batch = cp.mean(batch_left, axis=1, keepdims=True)
+            right_mean_batch = cp.mean(batch_right, axis=1, keepdims=True)
+
+            # Calculate the numerator and denominator for the correlation
+            num = cp.sum((batch_left - left_mean_batch) * (batch_right - right_mean_batch), axis=1)
+            left_sq_diff = cp.sum((batch_left - left_mean_batch) ** 2, axis=1)
+            right_sq_diff = cp.sum((batch_right - right_mean_batch) ** 2, axis=1)
+
+            den = cp.sqrt(left_sq_diff * right_sq_diff)
+            ho_batch = num / cp.maximum(den, 1e-10)
+
+            # Store the results for this batch
+            ho[i:end] = ho_batch
+
+            # Release memory after processing each batch
+            del batch_left, batch_right, left_mean_batch, right_mean_batch, ho_batch
+            cp.get_default_memory_pool().free_all_blocks()
+            gc.collect()
+
+
+        return ho
+
+    def correlation_process(self, points_3d, win_size=3, threshold=0.8):
         """
         Zscan process of temporal and spatial correlations.
         Parameters:
@@ -681,78 +595,54 @@ class InverseTriangulation:
         Returns:
             correl_points: (X*Y, 3) list from bests correlation points.
         """
-        t0 = time.time()
         uv_left = self.transform_gcs2ccs(points_3d=points_3d, cam_name='left')
         uv_right = self.transform_gcs2ccs(points_3d=points_3d, cam_name='right')
 
-        print('Transform points to image: {:.2f} s'.format(time.time() - t0))
-        # t1 = time.time()
-        # inter_left, std_left = self.bi_interpolation(self.left_images, uv_left)
-        # inter_right, std_right = self.bi_interpolation(self.right_images, uv_right)
-        #
-        # print('Bi-Interpolation Time: {:.2f} s'.format(time.time() - t1))
-        t2 = time.time()
+       
         spatial_id, spatial_max, std_corr = self.spatial_correl(window_size=win_size, uv_left=uv_left,
                                                                 uv_right=uv_right)
-        print('Spatial correlation time: {:.2f} s'.format(time.time() - t2))
         correl_mask = self.correl_mask(std_correl=std_corr, correl_max=spatial_max, correl_thresh=threshold,
-                                       std_thresh=20)
+                                       std_thresh=60)
         space_temp_correl_pt = points_3d[np.asarray(cp.asnumpy(spatial_id[correl_mask])).astype(np.int32)]
 
-        print('Correlation process: {:.2f} s'.format(time.time() - t0))
-
-        if save_points:
-            self.save_points(space_temp_correl_pt,
-                             filename='./temp_{}_{}_{}.csv'.format(self.right_images.shape[2], int(threshold * 100),
-                                                                   win_size))
-        if visualize:
-            self.plot_3d_points(space_temp_correl_pt[:, 0], space_temp_correl_pt[:, 1], space_temp_correl_pt[:, 2],
-                                title="Temporal x Spatial correlation result"
-                                      "\n {} imgs"
-                                      "\n {} % threshold"
-                                      "\n{} win size".format(self.right_images.shape[2], threshold * 100, win_size))
+       
         del uv_left, uv_right, spatial_id, spatial_max, std_corr
         return space_temp_correl_pt
-
-    def temp_correlation_process(self, points_3d, threshold=0.8, save_points=True, visualize=False):
+  
+    def save_points(self, points, filename, delimiter=','):
         """
-        Zscan process of temporal and spatial correlations.
+        Save 3D points to a text file.
         Parameters:
-            points_3d: ndarray(N,3) xyz meshgrid of points
-            correl_param: tuple(float) fused correlation parameter (spatial, correlation)
-            threshold: (float) threshold of correlation coefficient
-            save_points: (bool) whether to save temporal and spatial correlation images or not.
-            visualize: (bool) whether to visualize correlation images or not.
-        Returns:
-            correl_points: (X*Y, 3) list from bests correlation points.
+            points: (N, 3) array of 3D points.
         """
-        t0 = time.time()
-        uv_left = self.transform_gcs2ccs(points_3d=points_3d, cam_name='left')
-        uv_right = self.transform_gcs2ccs(points_3d=points_3d, cam_name='right')
+        np.savetxt(filename, points, fmt='%.6f', delimiter=delimiter)
+        return True
+    
+    def plot_3d_points(self, x, y, z, color=None, title='Plot 3D of max correlation points'):
+        """
+        Plot 3D points as scatter points where color is based on Z value
+        Parameters:
+            x: array of x positions
+            y: array of y positions
+            z: array of z positions
+            color: Vector of point intensity grayscale
+        """
+        if color is None:
+            color = z
+        cmap = 'viridis'
+        # Plot the 3D scatter plot
+        fig = plt.figure(figsize=(10, 8))
+        ax = fig.add_subplot(111, projection='3d')
+        ax.title.set_text(title)
 
-        print('Transform points to image: {:.2f} s'.format(time.time() - t0))
-        t1 = time.time()
-        inter_left, std_left = self.bi_interpolation(self.left_images, uv_left)
-        inter_right, std_right = self.bi_interpolation(self.right_images, uv_right)
-        #
-        print('Bi-Interpolation Time: {:.2f} s'.format(time.time() - t1))
-        t2 = time.time()
-        #
-        ho, hmax, imax, ho_zstep = self.temp_cross_correlation(left_Igray=inter_left, right_Igray=inter_right)
-        #
-        print('Temporal cross correlation time: {:.2f} s'.format(time.time() - t2))
+        scatter = ax.scatter(x, y, z, c=color, cmap=cmap, marker='o')
+        # ax.set_zlim(0, np.max(z))
+        colorbar = plt.colorbar(scatter, ax=ax, shrink=0.5, aspect=5)
+        colorbar.set_label('Z Value Gradient')
 
-        temp_correl_pt = points_3d[np.asarray(imax[hmax > threshold]).astype(np.int32)]
-
-        print('Correlation process: {:.2f} s'.format(time.time() - t0))
-
-        if save_points:
-            self.save_points(temp_correl_pt, filename='./temp_{}_{}.csv'.format(self.right_images.shape[2], threshold))
-        if visualize:
-            self.plot_3d_points(temp_correl_pt[:, 0], temp_correl_pt[:, 1], temp_correl_pt[:, 2],
-                                color=np.asarray(cp.asnumpy(imax[hmax > threshold])),
-                                title="Temporal correlation result"
-                                      "\n {} imgs".format(self.right_images.shape[2]))
-        del uv_left, uv_right, inter_right, inter_left, ho, hmax, imax, ho_zstep
-
-        return temp_correl_pt
+        # Add labels
+        ax.set_xlabel('X [mm]')
+        ax.set_ylabel('Y [mm]')
+        ax.set_zlabel('Z [mm]')
+        ax.set_aspect('equal', adjustable='box')
+        plt.show()

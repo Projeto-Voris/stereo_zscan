@@ -85,7 +85,7 @@ def save_camera_parameters_to_yaml(file_path, camera_matrix_left, dist_coeffs_le
 
 
 def main():
-    path = 'images/SM3-20240815_1'
+    path = '../images/SM3-20240815_1'
     yaml_file = '../cfg/SM3_20240815_bouget.yaml'
     left_images = sorted(os.listdir(os.path.join(path, 'left')))
     right_images = sorted(os.listdir(os.path.join(path, 'right')))

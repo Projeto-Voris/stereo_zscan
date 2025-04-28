@@ -4,6 +4,7 @@
 /venv/
 ''
 /csv/
+/.vscode/
 */.DS_Store
 */.vscode/
 */__pycache__
