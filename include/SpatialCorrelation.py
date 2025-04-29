@@ -26,6 +26,34 @@ class StereoSpatialCorrelator:
         # self.uv_left = []
         # self.uv_right = []
 
+    def plot_3d_points(self, x, y, z, color=None, title='Plot 3D of max correlation points'):
+        """
+        Plot 3D points as scatter points where color is based on Z value
+        Parameters:
+            x: array of x positions
+            y: array of y positions
+            z: array of z positions
+            color: Vector of point intensity grayscale
+        """
+        if color is None:
+            color = z
+        cmap = 'viridis'
+        # Plot the 3D scatter plot
+        fig = plt.figure(figsize=(10, 8))
+        ax = fig.add_subplot(111, projection='3d')
+        ax.title.set_text(title)
+
+        scatter = ax.scatter(x, y, z, c=color, cmap=cmap, marker='o')
+        # ax.set_zlim(0, np.max(z))
+        colorbar = plt.colorbar(scatter, ax=ax, shrink=0.5, aspect=5)
+        colorbar.set_label('Z Value Gradient')
+
+        # Add labels
+        ax.set_xlabel('X [mm]')
+        ax.set_ylabel('Y [mm]')
+        ax.set_zlabel('Z [mm]')
+        ax.set_aspect('equal', adjustable='box')
+        plt.show()
     def read_yaml_file(self, yaml_file):
         """
         Read YAML file to extract cameras parameters
@@ -176,7 +204,7 @@ class StereoSpatialCorrelator:
             cp.get_default_memory_pool().free_all_blocks()
             gc.collect()
 
-        return uv_points_list
+        return uv_points_list[:2, :].transpose(0, 2, 1)  # (N, P, 2)
 
     def points3d(self, x_lim, y_lim, z_lim, xy_step, z_step):
         """
@@ -199,13 +227,10 @@ class StereoSpatialCorrelator:
 
         return self.grid  # (Nx, Ny, Nz, 3)
 
-    def bilinear_interpolation(self, images, uv_coords):
-        """
-        Bilinear interpolation of grayscale images at given UV points.
-        """
+    def bilinear_interp_batch(self, images, uv):
         H, W, T = images.shape
-        x = uv_coords[:, 0]
-        y = uv_coords[:, 1]
+        N, P, _ = uv.shape
+        x, y = uv[:, :, 0], uv[:, :, 1]
 
         x0 = cp.floor(x).astype(cp.int32)
         x1 = cp.clip(x0 + 1, 0, W-1)
@@ -217,17 +242,18 @@ class StereoSpatialCorrelator:
         wc = (x - x0) * (y1 - y)
         wd = (x - x0) * (y - y0)
 
-        Ia = images[y0, x0, :]
-        Ib = images[y1, x0, :]
-        Ic = images[y0, x1, :]
-        Id = images[y1, x1, :]
+        Ia = images[y0, x0, :].transpose(0, 2, 1)
+        Ib = images[y1, x0, :].transpose(0, 2, 1)
+        Ic = images[y0, x1, :].transpose(0, 2, 1)
+        Id = images[y1, x1, :].transpose(0, 2, 1)
 
-        interpolated = (wa[:, None] * Ia +
-                        wb[:, None] * Ib +
-                        wc[:, None] * Ic +
-                        wd[:, None] * Id)
+        interp = (wa[:, None, :] * Ia +
+                  wb[:, None, :] * Ib +
+                  wc[:, None, :] * Ic +
+                  wd[:, None, :] * Id)
 
-        return interpolated  # (N_points, T)
+        return interp.transpose(0, 2, 1)  # (N, P, T)
+
 
     def spatial_correlation(self, interp_left, interp_right):
         """
@@ -251,7 +277,7 @@ class StereoSpatialCorrelator:
         Nx, Ny, Nz, _ = self.grid.shape
 
         results = []
-
+        vec_corr = []
         # Build center locations
         x_centers = cp.arange(self.x_vals[0]+r_xy, self.x_vals[-1]-r_xy, stride)
         y_centers = cp.arange(self.y_vals[0]+r_xy, self.y_vals[-1]-r_xy, stride)
@@ -301,6 +327,142 @@ class StereoSpatialCorrelator:
                 best_corr = corr_depth[best_z_idx]
 
                 # Save (x, y, best_z, best_corr)
-                results.append(([float(x0), float(y0), float(best_z)], float(best_corr)))
 
-        return results
+                results.append(([float(x0), float(y0), float(best_z)]))
+                vec_corr.append(best_corr)
+        return results, vec_corr
+
+    def project_points(self, pts, cam_name):
+        N, _, _, _, _ = pts.shape
+        R = cp.asarray(self.camera_params[cam_name]['r'])
+        t = cp.asarray(self.camera_params[cam_name]['t']).reshape(3,1)
+        K = cp.asarray(self.camera_params[cam_name]['kk'])
+        pts_flat = pts.reshape(N, -1, 3).transpose(0, 2, 1)  # (N, 3, P)
+        cam = R @ pts_flat + t  # (N, 3, P)
+        x = cam[:, 0] / (cam[:, 2] + 1e-8)
+        y = cam[:, 1] / (cam[:, 2] + 1e-8)
+        uv = K @ cp.stack([x, y, cp.ones_like(x)], axis=1)  # (N, 3, P)
+        return uv[:, :2].transpose(0, 2, 1)  # (N, P, 2)
+    def extract_kernels_batch(self, r_xy, stride):
+        """
+        Vectorized extraction of all (Kx, Ky, Nz, 3) kernels at once.
+        Parameters:
+            r_xy   : float     – radius in world units around each (x0,y0)
+            stride : float     – step size between kernel centers (world units)
+        Returns:
+            kernels : cp.ndarray, shape (N_centers, Kx, Ky, Nz, 3)
+            centers : list[(float,float)], length N_centers
+        """
+        # grid shape: (Nx, Ny, Nz, 3)
+        Nx, Ny, Nz, _ = self.grid.shape
+        dx = float(self.x_vals[1] - self.x_vals[0])
+        dy = float(self.y_vals[1] - self.y_vals[0])
+
+        # compute index‐radius
+        r_ix = int(round(r_xy / dx))
+        r_iy = int(round(r_xy / dy))
+
+        # compute stride in index units (at least 1)
+        stride_ix = max(1, int(round(stride / dx)))
+        stride_iy = max(1, int(round(stride / dy)))
+
+        # valid center index ranges
+        ix_min, ix_max = r_ix, Nx - r_ix
+        iy_min, iy_max = r_iy, Ny - r_iy
+
+        # build index arrays for centers
+        ix_centers = cp.arange(ix_min, ix_max, stride_ix)  # shape (N_centers_x,)
+        iy_centers = cp.arange(iy_min, iy_max, stride_iy)  # shape (N_centers_y,)
+
+        # make a meshgrid of those center‐indices
+        IX, IY = cp.meshgrid(ix_centers, iy_centers, indexing='ij')
+        IX = IX.ravel()  # (N_centers,)
+        IY = IY.ravel()  # (N_centers,)
+        N_centers = IX.size
+
+        # record real‐world center coordinates
+        centers_x = self.x_vals[IX]  # (N_centers,)
+        centers_y = self.y_vals[IY]  # (N_centers,)
+        centers = list(zip(cp.asnumpy(centers_x), cp.asnumpy(centers_y)))
+
+        # build relative offsets for the kernel window
+        off_x = cp.arange(-r_ix, r_ix + 1)  # (Kx,)
+        off_y = cp.arange(-r_iy, r_iy + 1)  # (Ky,)
+
+        # compute absolute indices for each kernel center
+        #   x_idx: (N_centers, Kx)
+        x_idx = IX[:, None] + off_x[None, :]
+        #   y_idx: (N_centers, Ky)
+        y_idx = IY[:, None] + off_y[None, :]
+
+        # gather kernels via advanced indexing:
+        #   self.grid has shape (Nx, Ny, Nz, 3)
+        #   we want kernels of shape (N_centers, Kx, Ky, Nz, 3)
+        kernels = self.grid[
+                  x_idx[:, :, None],  # (N_centers, Kx, 1)
+                  y_idx[:, None, :],  # (N_centers, 1, Ky)
+                  :,  # all Nz
+                  :  # all 3 coords
+                  ]
+        # resulting shape: (N_centers, Kx, Ky, Nz, 3)
+
+        return kernels, centers
+
+    def correlate_batch(self, left, right):
+        mean_l = cp.mean(left, axis=2, keepdims=True)
+        mean_r = cp.mean(right, axis=2, keepdims=True)
+
+        num = cp.sum((left - mean_l) * (right - mean_r), axis=2)
+        den = cp.sqrt(cp.sum((left - mean_l) ** 2, axis=2) * cp.sum((right - mean_r) ** 2, axis=2))
+        return num / (den + 1e-8)
+
+    def run_batch(self, r_xy=0.1, stride=0.1):
+        kernels, centers = self.extract_kernels_batch(r_xy, stride)  # (N_kernels, Kx, Ky, Nz, 3)
+        N, Kx, Ky, Nz, _ = kernels.shape
+        P = Kx * Ky * Nz
+
+        pts_flat = kernels.reshape(N, P, 3)
+
+        uv_left = self.project_points(kernels,cam_name='left')  # (N, P, 2)
+        uv_right = self.project_points(kernels, cam_name='right')
+
+        interp_L = self.bilinear_interp_batch(self.left_images, uv_left)  # (N, P, T)
+        interp_R = self.bilinear_interp_batch(self.right_images, uv_right)
+
+        interp_L = interp_L.reshape(N, Kx, Ky, Nz, -1)
+        interp_R = interp_R.reshape(N, Kx, Ky, Nz, -1)
+
+        # Compute std deviation over time for each point
+        std_L = cp.std(interp_L, axis=0)  # (N, P)
+        std_R = cp.std(interp_R, axis=0)  # (N, P)
+
+        # Compute mean std per kernel (N,)
+        mean_std_L = cp.mean(std_L, axis=(2,3))
+        mean_std_R = cp.mean(std_R, axis=(2,3))
+
+        # Texture threshold (tune empirically)
+        std_thresh = .01
+        texture_mask = (mean_std_L > std_thresh) & (mean_std_R > std_thresh)  # shape (N,)
+        corr_all = []
+
+        for z in range(Nz):
+            l = interp_L[:, :, :, z, :].reshape(N, -1, interp_L.shape[-1])
+            r = interp_R[:, :, :, z, :].reshape(N, -1, interp_R.shape[-1])
+            corr = self.correlate_batch(l, r)
+            corr_mean = cp.mean(corr, axis=1)
+            corr_all.append(corr_mean)
+
+        corr_all = cp.stack(corr_all, axis=1)  # (N, Nz)
+        z_best_idx = cp.argmax(corr_all, axis=1)
+        z_best = self.z_vals[z_best_idx]
+        corr_best = cp.max(corr_all, axis=1)
+
+        # Convert list of (x0, y0) to Cupy array: (N, 2)
+        centers_cp = cp.asarray(centers, dtype=cp.float32)  # shape: (N, 2)
+
+        # Combine with z_best to form (N, 3)
+        xyz = cp.concatenate((centers_cp, z_best[:, None]), axis=1)  # (N, 3)
+        texture_mask = texture_mask.ravel()
+        xyz = xyz[texture_mask]
+        corr_best = corr_best[texture_mask]
+        return xyz, corr_best

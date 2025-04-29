@@ -9,7 +9,7 @@ from include.InverseTriangulation import InverseTriangulation
 import extras.project_points as project_points
 def main():
     # Paths for yaml file and images
-    yaml_file = 'cfg/20250424.yaml'
+    yaml_file = 'cfg/SM3-20250424.yaml'
     # images_path = 'images/SM4-20241004 -calib 25x25'
     images_path = '/home/daniel/Insync/daniel.regner@labmetro.ufsc.br/Google Drive - Shared drives/VORIS - Media/Experimentos/SM3/Calibração/SM3 -20250424 - 10x10'
     left_imgs_list = sorted(os.listdir(os.path.join(images_path, 'left')))

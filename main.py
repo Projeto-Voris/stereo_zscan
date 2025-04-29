@@ -12,7 +12,7 @@ from extras.project_points import read_images, points3d_cube
 
 
 def main():
-    yaml_file = 'cfg/20250424.yaml'
+    yaml_file = 'cfg/SM3-20250424.yaml'
     images_path = '/home/daniel/Insync/daniel.regner@labmetro.ufsc.br/Google Drive - Shared drives/VORIS - Media/Experimentos/SM3 - Padrão aleatório/20250425 -Grasshopper f_25mm'
     Nimg = 30
     method = 'spatial'
