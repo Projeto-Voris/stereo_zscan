@@ -311,7 +311,7 @@ class InverseTriangulation:
             # y_indices_r = cp.clip(y1_r[:, :, None] + offsets[None, :], 0, height - window_size)
             # x_indices_r = cp.clip(x1_r[:, :, None] + offsets[None, :], 0, width - window_size)
     
-    def bi_interpolation(self, images, uv_points, window_size=3):
+    def bi_interpolation(self, images, uv_points):
         """
         Perform bilinear interpolation on a stack of images at specified uv_points on the GPU.
 
