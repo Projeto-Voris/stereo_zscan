@@ -54,6 +54,7 @@ class StereoSpatialCorrelator:
         ax.set_zlabel('Z [mm]')
         ax.set_aspect('equal', adjustable='box')
         plt.show()
+    
     def read_yaml_file(self, yaml_file):
         """
         Read YAML file to extract cameras parameters

@@ -73,9 +73,9 @@ def main():
         #xyz = xyz[corr > 0.9]
         cp.cuda.profiler.stop()
         print('1st Corrlation time {} s'.format(round(time.time() - t2, 2)))
-        # Zscan.plot_3d_points(xyz[:,0], xyz[:,1], xyz[:,2], color=corr)
+        Zscan.plot_3d_points(xyz[:,0], xyz[:,1], xyz[:,2], color=corr)
         cp.cuda.profiler.start()
-        # Zscan.plot_3d_points(filtered_xyz[:,0], filtered_xyz[:,1], filtered_xyz[:,2], color=filtered_corr)
+        Zscan.plot_3d_points(filtered_xyz[:,0], filtered_xyz[:,1], filtered_xyz[:,2], color=filtered_corr)
         t3 = time.time()
         xlim = [min(filtered_xyz[:,0]), max(filtered_xyz[:,0])] 
         ylim = [min(filtered_xyz[:,1]), max(filtered_xyz[:,1])]
@@ -93,9 +93,9 @@ def main():
         cp.cuda.profiler.stop()
         print('Z: {} to {} mm'.format(min(filtered_xyz[:,2]), max(filtered_xyz[:,2])))
         print('2nd Correlation timel: {} s'.format(round(time.time() - t3, 2)))
-        # Zscan.plot_3d_points(filtered_xyz[:,0], filtered_xyz[:,1], filtered_xyz[:,2], color=filtered_corr)
-        # Zscan.plot_3d_points(xyz[corr>0.95][:,0], xyz[corr>0.95][:,1], xyz[corr>0.95][:,2], color=corr[corr>0.95])
-        save_point_cloud('./sm3_calota_{}.csv'.format(n_img), filtered_xyz)
+        Zscan.plot_3d_points(filtered_xyz[:,0], filtered_xyz[:,1], filtered_xyz[:,2], color=filtered_corr)
+        Zscan.plot_3d_points(xyz[corr>0.95][:,0], xyz[corr>0.95][:,1], xyz[corr>0.95][:,2], color=corr[corr>0.95])
+        # save_point_cloud('./sm3_calota_{}.csv'.format(n_img), filtered_xyz)
 
 
 
