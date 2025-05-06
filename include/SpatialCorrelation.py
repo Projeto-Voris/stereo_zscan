@@ -137,7 +137,6 @@ class StereoSpatialCorrelator:
         # Convert all inputs to CuPy arrays for GPU computation
         xyz_gcs = cp.asarray(points_3d)
         k = cp.asarray(self.camera_params[cam_name]['kk'])
-        dist = cp.asarray(self.camera_params[cam_name]['kc'])
         rot = cp.asarray(self.camera_params[cam_name]['r'])
         tran = cp.asarray(self.camera_params[cam_name]['t'])
 
@@ -147,7 +146,7 @@ class StereoSpatialCorrelator:
 
         # Estimate the memory required per point for transformation and intermediate steps
         memory_per_point = (4 * 3 * bytes_per_float32) + (3 * bytes_per_float32)  # For xyz_gcs_1 and xyz_ccs
-        total_memory_required = self.num_points * memory_per_point
+        total_memory_required = points_3d.shape[0] * memory_per_point
 
         # Adjust the batch size based on memory limitations
         if total_memory_required > self.max_gpu_usage * 1024 ** 3:
@@ -155,14 +154,14 @@ class StereoSpatialCorrelator:
                 (self.max_gpu_usage * 1024 ** 3 // memory_per_point) // 10)  # Reduce batch size more aggressively
             # print(f"Processing {points_per_batch} points per batch due to memory limitations.")
         else:
-            points_per_batch = self.num_points  # Process all points at once
+            points_per_batch = points_3d.shape[0] # Process all points at once
 
         # Initialize an empty list to store results (on the CPU)
         uv_points_list = cp.empty((2, xyz_gcs.shape[0]), dtype=np.float16)
 
         # Process points in batches
-        for i in range(0, self.num_points, points_per_batch):
-            end = min(i + points_per_batch, self.num_points)
+        for i in range(0, points_3d.shape[0], points_per_batch):
+            end = min(i + points_per_batch, points_3d.shape[0])
             xyz_gcs_batch = xyz_gcs[i:end]
 
             # Debug: Check the shape of the batch
@@ -221,11 +220,7 @@ class StereoSpatialCorrelator:
         self.y_vals = cp.asarray(y_lin)
         self.z_vals = cp.asarray(z_lin)
 
-        self.grid = cp.asarray(points)
-        self.num_points = self.grid.shape[0]*self.grid.shape[1]*self.grid.shape[2]
-        self.z_scan_step = np.unique(self.grid[:,2]).shape[0]//self.num_points
-
-        return self.grid  # (Nx, Ny, Nz, 3)
+        self.grid = cp.asarray(points, dtype=cp.float16)  # shape (Nx, Ny, Nz, 3)
 
     def bi_interpolation(self, images, uv_points):
         """
@@ -252,15 +247,15 @@ class StereoSpatialCorrelator:
         height, width, num_images = images.shape
 
         # Estimate memory usage per point
-        memory_per_point = 4 * num_images * 4
+        memory_per_point = 8 * num_images * 4
         points_per_batch = max(1, int(self.max_gpu_usage * 1024 ** 3 // memory_per_point))
 
         # Output arrays on GPU
-        interpolated = cp.zeros((self.num_points, num_images), dtype=cp.float16)
-        std = cp.zeros((self.num_points, num_images), dtype=cp.float16)
+        interpolated = cp.zeros((uv_points.shape[1], num_images), dtype=cp.float16)
+        std = cp.zeros((uv_points.shape[1], num_images), dtype=cp.float16)
 
-        for i in range(0, self.num_points, points_per_batch):
-            end = min(i + points_per_batch, self.num_points)
+        for i in range(0, uv_points.shape[1], points_per_batch):
+            end = min(i + points_per_batch, uv_points.shape[1])
             uv_batch = uv_points[:, i:end]
 
             # Compute integer and fractional parts of UV coordinates
@@ -413,7 +408,7 @@ class StereoSpatialCorrelator:
         # Extract kernels and centers
         # kernels: (N_kernels, Kx, Ky, Nz, 3)
         # centers: list of tuples (x, y)
-        kernels, centers = self.extract_kernels_batch(r_xy, stride)  # (N_kernels, Kx, Ky, Nz, 3)
+        kernels, centers = self.extract_kernels_batch(r_xy=r_xy, stride=stride)  # (N_kernels, Kx, Ky, Nz, 3)
         #
         N, Kx, Ky, Nz, _ = kernels.shape
 
@@ -439,10 +434,6 @@ class StereoSpatialCorrelator:
         std_R = cp.std(stdR, axis=1)  # (N, P)
 
 
-
-        # Texture threshold (tune empirically)
-        std_thresh = 20
-        texture_mask = (std_L > std_thresh) & (std_R > std_thresh)  # shape (N,)
         corr_all = []
 
         for z in range(Nz):
@@ -463,10 +454,9 @@ class StereoSpatialCorrelator:
 
         # Combine with z_best to form (N, 3)
         xyz = cp.concatenate((centers_cp, z_best[:, None]), axis=1)  # (N, 3)
-        texture_mask = texture_mask.ravel()
         # xyz = xyz[texture_mask]
         # corr_best = corr_best[texture_mask]
-        return xyz, corr_best, texture_mask
+        return xyz, corr_best, std_L, std_R
 
     def temp_cross_correlation(self, left_Igray, right_Igray):
         """
@@ -483,25 +473,8 @@ class StereoSpatialCorrelator:
         ho_ztep: List of correlation values for all Z value of each XY.
         """
 
-        num_images = left_Igray.shape[1]  # Number of images
-
-        # Number of tested Z (this will be used as batch size)
- 
-        # Estimate memory usage per point
-        bytes_per_float32 = 8
-        memory_per_point = (4 * num_images * bytes_per_float32)
-        # For left_Igray, right_Igray, and intermediate calculations
-        total_memory_required = self.num_points * memory_per_point
-
-        # Adjust the batch size based on memory limitations
-        if total_memory_required > self.max_gpu_usage * 1024 ** 3:
-            points_per_batch = int(self.max_gpu_usage * 1024 ** 3 // memory_per_point // 10)
-            # print(f"Processing {points_per_batch} points per batch due to memory limitations.")
-        else:
-            points_per_batch = self.num_points  # Process all points at once
-
         # Initialize outputs with the correct data type (float32 for memory efficiency)
-        ho = cp.empty(self.num_points, dtype=cp.float32)
+        ho = cp.empty(left_Igray.shape[0], dtype=cp.float32)
 
 
         # Load only the current batch into the GPU
