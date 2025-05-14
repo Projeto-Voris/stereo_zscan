@@ -69,7 +69,7 @@ class InverseTriangulation:
                             
         return images
 
-    def convert_images(self, left_imgs, right_imgs, apply_clahe=False, tile=11, climp=5.0, undist=False):
+    def convert_images(self, left_imgs, right_imgs, apply_clahe=False, tile=2, climp=5.0, undist=False):
         """
         Convert images to CuPy arrays for GPU processing.
         Optionally apply CLAHE (Contrast Limited Adaptive Histogram Equalization).
@@ -118,7 +118,7 @@ class InverseTriangulation:
         self.num_points = c_points.shape[0]
         self.z_scan_step = np.unique(c_points[:, 2]).shape[0]
 
-        return c_points.astype(np.float16)
+        return c_points.astype(np.float32)
     
     def point3d_split(self, x_lin, y_lin, z_lin, visualize=False):
         """
@@ -143,7 +143,7 @@ class InverseTriangulation:
         self.num_points = c_points.shape[0]
         self.z_scan_step = np.unique(c_points[:, 2]).shape[0]
 
-        return c_points.astype(np.float16)
+        return c_points.astype(np.float32)
 
     def kernel_3d(self, kernel_size=3, zlim=(0,10), dx=1, dy=1, dz=1):
         """
@@ -212,7 +212,7 @@ class InverseTriangulation:
             points_per_batch = self.num_points  # Process all points at once
 
         # Initialize an empty list to store results (on the CPU)
-        uv_points_list = cp.empty((2, xyz_gcs.shape[0]), dtype=np.float16)
+        uv_points_list = cp.empty((2, xyz_gcs.shape[0]), dtype=np.float32)
 
         # Process points in batches
         for i in range(0, self.num_points, points_per_batch):
@@ -223,12 +223,12 @@ class InverseTriangulation:
             # print(f"Processing batch {i // points_per_batch + 1}, size: {xyz_gcs_batch.shape}")
 
             # Add one extra line of ones to the global coordinates
-            ones = cp.ones((xyz_gcs_batch.shape[0], 1), dtype=cp.float16)  # Double-precision floats
+            ones = cp.ones((xyz_gcs_batch.shape[0], 1), dtype=cp.float32)  # Double-precision floats
             xyz_gcs_1 = cp.hstack((xyz_gcs_batch, ones))
 
             # Create the rotation and translation matrix
             rt_matrix = cp.vstack(
-                (cp.hstack((rot, tran[:, None])), cp.array([0, 0, 0, 1], dtype=cp.float16))
+                (cp.hstack((rot, tran[:, None])), cp.array([0, 0, 0, 1], dtype=cp.float32))
             )
 
             # Multiply the RT matrix with global points [X; Y; Z; 1]
@@ -239,7 +239,7 @@ class InverseTriangulation:
             epsilon = 1e-10  # Small value to prevent division by zero
             xyz_ccs_norm = cp.hstack(
                 (xyz_ccs[:2, :].T / cp.maximum(xyz_ccs[2, :, cp.newaxis], epsilon),
-                 cp.ones((xyz_ccs.shape[1], 1), dtype=cp.float16))
+                 cp.ones((xyz_ccs.shape[1], 1), dtype=cp.float32))
             ).T
             del xyz_ccs  # Immediately delete
 
@@ -247,11 +247,11 @@ class InverseTriangulation:
             if undist:
                 xyz_ccs_norm_dist = self.undistorted_points(xyz_ccs_norm.T, dist)
                 del xyz_ccs_norm  # Free memory
-                uv_points_batch = cp.dot(k, xyz_ccs_norm_dist.T).astype(cp.float16)
+                uv_points_batch = cp.dot(k, xyz_ccs_norm_dist.T).astype(cp.float32)
                 del xyz_ccs_norm_dist  # Free memory
             else:
                 # Compute image points using the intrinsic matrix K
-                uv_points_batch = cp.dot(k, xyz_ccs_norm).astype(cp.float16)
+                uv_points_batch = cp.dot(k, xyz_ccs_norm).astype(cp.float32)
                 del xyz_ccs_norm  # Free memory
 
             # Debug: Check the shape of the result
@@ -342,16 +342,16 @@ class InverseTriangulation:
         points_per_batch = max(1, int(self.max_gpu_usage * 1024 ** 3 // memory_per_point))
 
         # Output arrays on GPU
-        interpolated = cp.zeros((self.num_points, num_images), dtype=cp.float16)
-        std = cp.zeros((self.num_points, num_images), dtype=cp.float16)
+        interpolated = cp.zeros((self.num_points, num_images), dtype=cp.float32)
+        std = cp.zeros((self.num_points, num_images), dtype=cp.float32)
 
         for i in range(0, self.num_points, points_per_batch):
             end = min(i + points_per_batch, self.num_points)
             uv_batch = uv_points[:, i:end]
 
             # Compute integer and fractional parts of UV coordinates
-            x = uv_batch[0].astype(cp.float16)
-            y = uv_batch[1].astype(cp.float16)
+            x = uv_batch[0].astype(cp.float32)
+            y = uv_batch[1].astype(cp.float32)
 
             x1 = cp.clip(cp.floor(x).astype(cp.int32), 0, width - 1)
             y1 = cp.clip(cp.floor(y).astype(cp.int32), 0, height - 1)
@@ -422,8 +422,8 @@ class InverseTriangulation:
         points_per_batch = max(1, int(self.max_gpu_usage * 1024 ** 3 // memory_per_point))
         # points_per_batch = 10
         # Allocate space for results
-        spatial_corr = cp.zeros((self.num_points), dtype=cp.float16)
-        std_corr = cp.zeros((self.num_points), dtype=cp.float16)
+        spatial_corr = cp.zeros((self.num_points), dtype=cp.float32)
+        std_corr = cp.zeros((self.num_points), dtype=cp.float32)
 
         for i in range(0, self.num_points, points_per_batch):
             end_idx = min(i + points_per_batch, self.num_points)  # or np.int64
@@ -456,11 +456,11 @@ class InverseTriangulation:
             mean_right = cp.mean(patch_right, axis=(1, 2), keepdims=True)
             std_right = cp.std(patch_right, axis=(1, 2))
 
-            comb_std_left = cp.mean(std_left, axis=1).astype(cp.float16)
-            comb_std_right = cp.mean(std_right, axis=1).astype(cp.float16)
+            comb_std_left = cp.mean(std_left, axis=1).astype(cp.float32)
+            comb_std_right = cp.mean(std_right, axis=1).astype(cp.float32)
 
-            patch_left -= mean_left.astype(cp.float16)
-            patch_right -= mean_right.astype(cp.float16)
+            patch_left -= mean_left.astype(cp.float32)
+            patch_right -= mean_right.astype(cp.float32)
 
             # Compute spatial correlation
             num = cp.sum(patch_left * patch_right, axis=(1, 2))

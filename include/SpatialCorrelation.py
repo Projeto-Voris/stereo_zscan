@@ -223,45 +223,37 @@ class StereoSpatialCorrelator:
 
         self.grid = cp.asarray(points, dtype=cp.float16)  # shape (Nx, Ny, Nz, 3)
 
-    def bi_interpolation(self, images, uv_points):
+    def bi_interpolation(self, images, uv_points, batch_size=100000):
         """
-        Perform bilinear interpolation on a stack of images at specified uv_points on the GPU.
+        Interpolação bilinear em batches para evitar OOM na GPU.
 
         Parameters:
-        ----------
-        images : (height, width, num_images) array or (height, width) for a single image.
-        uv_points : (2, N) array of UV points where N is the number of points.
+            images : (H, W, T)
+            uv_points : (2, N)
+            batch_size : número máximo de pontos por batch
 
         Returns:
-        -------
-        interpolated : cp.ndarray
-            Interpolated pixel values for each point.
-        std : cp.ndarray
-            Standard deviation of the corner pixels used for interpolation.
+            interpolated : (N, T)
+            std : (N, T)
         """
         images = cp.asarray(images)
         uv_points = cp.asarray(uv_points)
 
-        if len(images.shape) == 2:  # Convert single image to a stack with one image
+        if len(images.shape) == 2:
             images = images[:, :, cp.newaxis]
 
         height, width, num_images = images.shape
+        N = uv_points.shape[1]
 
-        # Estimate memory usage per point
-        memory_per_point = 8 * num_images * 4
-        points_per_batch = max(1, int(self.max_gpu_usage * 1024 ** 3 // memory_per_point))
+        interpolated = cp.empty((N, num_images), dtype=cp.float16)
+        std = cp.empty((N, num_images), dtype=cp.float16)
 
-        # Output arrays on GPU
-        interpolated = cp.zeros((uv_points.shape[1], num_images), dtype=cp.float16)
-        std = cp.zeros((uv_points.shape[1], num_images), dtype=cp.float16)
-
-        for i in range(0, uv_points.shape[1], points_per_batch):
-            end = min(i + points_per_batch, uv_points.shape[1])
+        for i in range(0, N, batch_size):
+            end = min(i + batch_size, N)
             uv_batch = uv_points[:, i:end]
 
-            # Compute integer and fractional parts of UV coordinates
-            x = uv_batch[0].astype(cp.float16)
-            y = uv_batch[1].astype(cp.float16)
+            x = uv_batch[0].astype(cp.float32)
+            y = uv_batch[1].astype(cp.float32)
 
             x1 = cp.clip(cp.floor(x).astype(cp.int32), 0, width - 1)
             y1 = cp.clip(cp.floor(y).astype(cp.int32), 0, height - 1)
@@ -270,34 +262,28 @@ class StereoSpatialCorrelator:
 
             x_diff = x - x1
             y_diff = y - y1
-            for k in range(num_images):
-                # Vectorized extraction of corner pixels
-                p11 = images[y1, x1, k]  # Top-left
-                p12 = images[y2, x1, k]  # Bottom-left
-                p21 = images[y1, x2, k]  # Top-right
-                p22 = images[y2, x2, k]  # Bottom-right
 
-                # Bilinear interpolation
-                interpolated_batch = (
-                        p11 * (1 - x_diff) * (1 - y_diff) +
-                        p21 * x_diff * (1 - y_diff) +
-                        p12 * (1 - x_diff) * y_diff +
-                        p22 * x_diff * y_diff
+            for k in range(num_images):
+                p11 = images[y1, x1, k]
+                p12 = images[y2, x1, k]
+                p21 = images[y1, x2, k]
+                p22 = images[y2, x2, k]
+
+                interp = (
+                    p11 * (1 - x_diff) * (1 - y_diff) +
+                    p21 * x_diff * (1 - y_diff) +
+                    p12 * (1 - x_diff) * y_diff +
+                    p22 * x_diff * y_diff
                 )
 
-                std_batch = cp.std(cp.vstack([p11, p12, p21, p22]), axis=0)
+                std_dev = cp.std(cp.vstack([p11, p12, p21, p22]), axis=0)
 
-                # Store results in GPU arrays
-                interpolated[i:end, k] = interpolated_batch
-                std[i:end, k] = std_batch
+                interpolated[i:end, k] = interp
+                std[i:end, k] = std_dev
 
-            del p11, p12, p21, p22, std_batch, interpolated_batch
-        cp.get_default_memory_pool().free_all_blocks()
-        gc.collect()
-        # Convert results to CPU
-        # interpolated_cpu = cp.asnumpy(interpolated_gpu)
-        # std_cpu = cp.asnumpy(std_gpu)
-
+            del x1, x2, y1, y2, p11, p12, p21, p22
+            cp.get_default_memory_pool().free_all_blocks()
+            gc.collect()
 
         return interpolated, std
 
@@ -404,6 +390,51 @@ class StereoSpatialCorrelator:
 
         return filtered_xyz, filtered_corr
 
+    def extract_kernels_fixed(self, Kx=5, Ky=5, stride=1):
+        """
+        Extrai kernels com tamanho fixo Kx × Ky ao redor de pontos centrais definidos com espaçamento (stride).
+
+        Retorna:
+            kernels: (N, Kx, Ky, Nz, 3)
+            centers: lista de (x, y)
+        """
+        Nx, Ny, Nz, _ = self.grid.shape
+
+        pad_x = Kx // 2
+        pad_y = Ky // 2
+
+        stride_ix = stride
+        stride_iy = stride
+
+        ix_centers = cp.arange(pad_x, Nx - pad_x, stride_ix)
+        iy_centers = cp.arange(pad_y, Ny - pad_y, stride_iy)
+
+        IX, IY = cp.meshgrid(ix_centers, iy_centers, indexing='ij')
+        IX = IX.ravel()
+        IY = IY.ravel()
+        N_centers = IX.shape[0]
+
+        # centros em mm
+        centers = list(zip(cp.asnumpy(self.x_vals[IX]), cp.asnumpy(self.y_vals[IY])))
+
+        # deslocamentos
+        off_x = cp.arange(-pad_x, pad_x + 1)
+        off_y = cp.arange(-pad_y, pad_y + 1)
+
+        x_idx = IX[:, None] + off_x[None, :]
+        y_idx = IY[:, None] + off_y[None, :]
+
+        # Extrai (N, Kx, Ky, Nz, 3)
+        kernels = self.grid[
+            x_idx[:, :, None],
+            y_idx[:, None, :],
+            :,
+            :
+        ]
+
+        return kernels, centers
+
+    
     def run_batch(self, r_xy=0.1, stride=0.1):
 
         # Extract kernels and centers
@@ -451,13 +482,106 @@ class StereoSpatialCorrelator:
         corr_best = cp.nanmax(corr_all, axis=1)
 
         # Convert list of (x0, y0) to Cupy array: (N, 2)
-        centers_cp = cp.asarray(centers, dtype=cp.float32)  # shape: (N, 2)
+        centers_cp = cp.asarray(centers, dtype=cp.float16)  # shape: (N, 2)
 
         # Combine with z_best to form (N, 3)
         xyz = cp.concatenate((centers_cp, z_best[:, None]), axis=1)  # (N, 3)
         # xyz = xyz[texture_mask]
         # corr_best = corr_best[texture_mask]
         return xyz, corr_best, std_L, std_R
+    
+    def run_batch_2(self, Kx=5, Ky=5, stride=1, batch_size=10000, save_correlation=False):
+        """
+        Executa a reconstrução estéreo espaço-temporal em batches para evitar estouro de memória.
+
+        Parâmetros:
+            Kx, Ky       – tamanho do kernel espacial
+            stride       – espaçamento entre centros
+            batch_size   – número de centros processados por vez (GPU)
+
+        Retorna:
+            xyz         – (N_total, 3)
+            corr_best   – (N_total,)
+            std_L_out   – (N_total,)
+            std_R_out   – (N_total,)
+        """
+        # 1. Extrair todos os kernels de forma vetorizada
+        kernels, centers = self.extract_kernels_fixed(Kx=Kx, Ky=Ky, stride=stride)
+        N_total, _, _, Kz, _ = kernels.shape
+        T = self.left_images.shape[2]
+
+        # Prepara listas para resultados
+        xyz_all = []
+        corr_all = []
+        std_L_all = []
+        std_R_all = []
+
+        # 2. Processa em batches
+        for i in range(0, N_total, batch_size):
+            end = min(i + batch_size, N_total)
+
+            kernels_batch = kernels[i:end]                     # (B, Kx, Ky, Kz, 3)
+            centers_batch = centers[i:end]
+
+            B = kernels_batch.shape[0]
+            pts_flat = kernels_batch.reshape(B * Kx * Ky * Kz, 3)
+
+            # 3. Projeção estéreo
+            uv_left = self.transform_gcs2ccs(pts_flat, cam_name='left')
+            uv_right = self.transform_gcs2ccs(pts_flat, cam_name='right')
+
+            # 4. Interpolação bilinear
+            interp_L, stdL = self.bi_interpolation(self.left_images, uv_left)
+            interp_R, stdR = self.bi_interpolation(self.right_images, uv_right)
+
+            interp_L = interp_L.reshape(B, Kx, Ky, Kz, T)
+            interp_R = interp_R.reshape(B, Kx, Ky, Kz, T)
+
+            # 5. Reorganizar para vetorização por Z
+            interp_L_flat = interp_L.transpose(0, 3, 1, 2, 4).reshape(B * Kz, Kx * Ky, T)
+            interp_R_flat = interp_R.transpose(0, 3, 1, 2, 4).reshape(B * Kz, Kx * Ky, T)
+
+            # 6. Média espacial antes da correlação
+            interp_L_mean = cp.mean(interp_L_flat, axis=1)
+            interp_R_mean = cp.mean(interp_R_flat, axis=1)
+
+            # 7. Correlação temporal por voxel
+            corr = self.temp_cross_correlation(interp_L_mean, interp_R_mean)
+            corr = corr.reshape(B, Kz)
+
+            z_best_idx = cp.nanargmax(corr, axis=1)
+            z_best = self.z_vals[z_best_idx]
+            corr_best = cp.nanmax(corr, axis=1)
+
+            # 8. Coordenadas X, Y + Z estimado
+            centers_cp = cp.asarray(centers_batch, dtype=cp.float32)
+            xyz = cp.concatenate((centers_cp, z_best[:, None]), axis=1)
+
+            # 9. Desvio padrão da textura
+            std_L_out = cp.std(stdL, axis=1)
+            std_R_out = cp.std(stdR, axis=1)
+
+            # 10. Salva resultados do batch
+            xyz_all.append(xyz)
+            corr_all.append(corr_best)
+            std_L_all.append(std_L_out)
+            std_R_all.append(std_R_out)
+            if save_correlation:
+                np.savetxt('correlation_imgs{}_kernel{}_{}.csv'.format(T, Kx, ky), cp.asnumpy(corr_all), delimiter=',')
+
+            # 11. Liberação de memória
+            del interp_L, interp_R, interp_L_flat, interp_R_flat
+            del stdL, stdR, interp_L_mean, interp_R_mean
+            cp.get_default_memory_pool().free_all_blocks()
+            gc.collect()
+
+        # 12. Concatenar resultados de todos os batches
+        xyz_final = cp.concatenate(xyz_all, axis=0)
+        corr_final = cp.concatenate(corr_all, axis=0)
+        stdL_final = cp.concatenate(std_L_all, axis=0)
+        stdR_final = cp.concatenate(std_R_all, axis=0)
+
+        return xyz_final, corr_final, stdL_final, stdR_final
 
     def temp_cross_correlation(self, left_Igray, right_Igray):
         """
@@ -475,7 +599,7 @@ class StereoSpatialCorrelator:
         """
 
         # Initialize outputs with the correct data type (float32 for memory efficiency)
-        ho = cp.empty(left_Igray.shape[0], dtype=cp.float32)
+        ho = cp.empty(left_Igray.shape[0], dtype=cp.float16)
 
 
         # Load only the current batch into the GPU
