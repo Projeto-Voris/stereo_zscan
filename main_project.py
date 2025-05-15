@@ -58,8 +58,8 @@ def calculate_and_plot_uv_differences(uv_points):
 
 def main():
     # Paths for yaml file and images
-    yaml_file = '/home/daniel/Pictures/20250513_1205_step10/sm3_params.yaml'
-    images_path = '/home/daniel/Pictures/20250513_1205_step10'
+    yaml_file = 'SM3_20250509.yaml'
+    images_path = '20250513_1505_step10_plano_d3'
     left_imgs_list = sorted(os.listdir(os.path.join(images_path, 'left')))
 
     right_imgs_list = sorted(os.listdir(os.path.join(images_path, 'right')))
@@ -71,7 +71,7 @@ def main():
     right_imgs = Zscan.read_images(path=os.path.join(images_path,'right'), images_list=right_imgs_list, n_imgs=n_img)
     Zscan.convert_images(left_imgs=left_imgs, right_imgs=right_imgs, apply_clahe=True, undist=True)
 
-    points3d = Zscan.points3d(x_lim=(0,400), y_lim=(-125,225), z_lim=(-400,400), xy_step=25, z_step=20, visualize=True)
+    points3d = Zscan.points3d(x_lim=(50,300), y_lim=(-50,150), z_lim=(200,350), xy_step=25, z_step=1, visualize=False)
     print('points3d', points3d.shape)
     uv_left = Zscan.transform_gcs2ccs(points_3d=points3d, cam_name='left')
     uv_right = Zscan.transform_gcs2ccs(points_3d=points3d, cam_name='right')
