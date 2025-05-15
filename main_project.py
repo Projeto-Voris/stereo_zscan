@@ -58,20 +58,25 @@ def calculate_and_plot_uv_differences(uv_points):
 
 def main():
     # Paths for yaml file and images
-    yaml_file = 'SM3_20250509.yaml'
-    images_path = '20250513_1505_step10_plano_d3'
+    yaml_file = 'cfg/SM3_20250509.yaml'
+    images_path = '20250513_step10_plano_d2'
     left_imgs_list = sorted(os.listdir(os.path.join(images_path, 'left')))
 
     right_imgs_list = sorted(os.listdir(os.path.join(images_path, 'right')))
     # images_path = '/home/daniel/Pictures/sm3'
-    n_img = 400
+    n_img = 30
+    x_lim = (75, 325) 
+    y_lim = (-50, 150)
+    z_lim = (-120, 0)
+    dxyz = (25, 10) #xy step, z step
+
     Zscan = InverseTriangulation(yaml_file=yaml_file)
     # # Identify all images from path file
     left_imgs = Zscan.read_images(path=os.path.join(images_path,'left'), images_list=left_imgs_list, n_imgs=n_img)
     right_imgs = Zscan.read_images(path=os.path.join(images_path,'right'), images_list=right_imgs_list, n_imgs=n_img)
     Zscan.convert_images(left_imgs=left_imgs, right_imgs=right_imgs, apply_clahe=True, undist=True)
 
-    points3d = Zscan.points3d(x_lim=(50,300), y_lim=(-50,150), z_lim=(200,350), xy_step=25, z_step=1, visualize=False)
+    points3d = Zscan.points3d(x_lim=x_lim, y_lim=y_lim, z_lim=z_lim, xy_step=dxyz[0], z_step=dxyz[1], visualize=True)
     print('points3d', points3d.shape)
     uv_left = Zscan.transform_gcs2ccs(points_3d=points3d, cam_name='left')
     uv_right = Zscan.transform_gcs2ccs(points_3d=points3d, cam_name='right')
@@ -83,17 +88,11 @@ def main():
     output_image_R = plot_points_on_image(image=cp.asnumpy(Zscan.right_images[:, :, 0]), points=uv_right, color=(0, 255, 0),
                                                    radius=4,
                                                    thickness=-1)
-    output_image_L400 = plot_points_on_image(image=cp.asnumpy(Zscan.left_images[:, :,-1]), points=uv_left, color=(0, 255, 0),
-                                                   radius=4,
-                                                   thickness=-1)
-    output_image_R400 = plot_points_on_image(image=cp.asnumpy(Zscan.right_images[:, :, -1]), points=uv_right, color=(0, 255, 0),
-                                                   radius=4,
-                                                   thickness=-1)
+
 
     show_stereo_images(output_image_L, output_image_R, "Remaped points")
     cv2.waitKey(0)
-    show_stereo_images(output_image_L400, output_image_R400, "Remaped points")
-    cv2.waitKey(0)
+
     mask_left = (uv_left < 0) | (uv_left > left_imgs[0].shape[1])
     mask_right = (uv_right < 0) | (uv_right > right_imgs[0].shape[1])
     mask = np.any((mask_left | mask_right), axis=0)

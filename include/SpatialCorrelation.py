@@ -22,7 +22,7 @@ class StereoTemporalSpatialCorrel:
         self.read_yaml_file(yaml_file)
 
 
-        self.max_gpu_usage = self.set_datalimit() // 3
+        self.max_gpu_usage = self.set_datalimit() // 5
 
         # self.uv_left = []
         # self.uv_right = []
@@ -129,6 +129,25 @@ class StereoTemporalSpatialCorrel:
         # Convert bytes to GB
         return total_memory / (1024 ** 3)
 
+    def estimate_batch_size(self, Kx, Ky, Nz, T, safety_margin=0.5):
+        """
+        Estima um batch_size seguro para a GPU, baseado no uso de memória por bloco.
+
+        safety_margin: fração da GPU a ser utilizada (ex: 0.5 → usa até 50% da memória)
+        """
+        mem_total_GB = self.max_gpu_usage      # ex: 24.0 GB
+        mem_target_GB = mem_total_GB * safety_margin  # ex: 12.0 GB
+
+        bytes_per_float = 4  # float32
+        mem_target_bytes = mem_target_GB * (1024 ** 3)
+
+        # Memória por centro (Nc=1), L e R (2 blocos)
+        mem_per_center = Kx * Ky * Nz * T * 2 * bytes_per_float
+
+        # Batch size máximo
+        batch_size = int(mem_target_bytes // mem_per_center)
+        return max(1, batch_size)  # garante mínimo de 1
+
     def transform_gcs2ccs(self, points_3d, cam_name):
         """
         Transform Global Coordinate System (xg, yg, zg)
@@ -170,7 +189,7 @@ class StereoTemporalSpatialCorrel:
             # print(f"Processing batch {i // points_per_batch + 1}, size: {xyz_gcs_batch.shape}")
 
             # Add one extra line of ones to the global coordinates
-            ones = cp.ones((xyz_gcs_batch.shape[0], 1), dtype=cp.float32)  # Double-precision floats
+            ones = cp.ones((xyz_gcs_batch.shape[0], 1), dtype=cp.float16)  # Double-precision floats
             xyz_gcs_1 = cp.hstack((xyz_gcs_batch, ones))
 
             # Create the rotation and translation matrix
@@ -416,7 +435,7 @@ class StereoTemporalSpatialCorrel:
 
         return kernels_idx, (IX, IY)
 
-    def process(self, Kx=5, Ky=5, stride=1, batch_size=10000, save_correlation=False):
+    def process(self, Kx=5, Ky=5, stride=1, save_correlation=False, batch_size=None):
         """
         Executa reconstrução estéreo espaço-temporal usando referência por índices de voxel.
 
@@ -429,9 +448,14 @@ class StereoTemporalSpatialCorrel:
             stdL_final    (N,): desvio padrão médio da textura L
             stdR_final    (N,): desvio padrão médio da textura R
         """
+        Nx, Ny, Nz = self.grid.shape[:3]
+        T = self.left_images.shape[2]
+
+        if batch_size is None:
+            batch_size = self.estimate_batch_size(Kx, Ky, Nz, T, safety_margin=0.5)
+            print(f"[INFO] Using estimated batch_size = {batch_size}")
 
         grid_flat = self.grid.reshape(-1, 3)  # (N, 3)
-        Nx, Ny, Nz = self.grid.shape[:3]
         self.grid_indices = cp.arange(Nx * Ny * Nz).reshape(Nx, Ny, Nz)
 
         # 3. Projeção estéreo para pontos únicos
@@ -439,134 +463,123 @@ class StereoTemporalSpatialCorrel:
         uv_right = self.transform_gcs2ccs(grid_flat, cam_name='right')
 
         # 4. Interpolação bilinear dos pontos únicos
-        interp_L, stdL_map = self.bi_interpolation(self.left_images, uv_left)
-        interp_R, stdR_map = self.bi_interpolation(self.right_images, uv_right)
+        interp_L, std_L_map = self.bi_interpolation(self.left_images, uv_left)
+        interp_R, std_R_map = self.bi_interpolation(self.right_images, uv_right)
 
         # 5. Construir mapas indexáveis (por voxel_id)
         kernels_idx, (IX, IY) = self.get_kernel_indices(Kx=Kx, Ky=Ky, stride=stride)  # (Nc, Kx, Ky, Nz)
+        Nc, Kx, Ky, Nz = kernels_idx.shape
 
-        T = interp_L.shape[1]
-        del uv_left, uv_right, grid_flat
-        interp_L_kernels = interp_L[kernels_idx]  # (Nc, Kx, Ky, Nz, T)
-        interp_R_kernels = interp_R[kernels_idx]
-        stdL_kernels = stdL_map[kernels_idx]
-        stdR_kernels = stdR_map[kernels_idx]
-        
-        # 5. Correlação espaço-temporal reduzida por Z
-        corr_all, corr_max, z_best = self.spatial_temp_correl(interp_L_kernels, interp_R_kernels)
 
-        if save_correlation:
-            np.savetxt('correlation_img{}_kernel{}_.txt'.format(T, Kx), corr_all.get(), delimiter=',')
-        # 6. Calcular desvio padrão médio da textura
-        stdL_final = cp.mean(cp.std(stdL_kernels, axis=-1), axis=(1, 2))  # (Nc,)
-        stdR_final = cp.mean(cp.std(stdR_kernels, axis=-1), axis=(1, 2))  # (Nc,)
+    # 4. Inicializa listas para acumular resultados
+        xyz_parts = []
+        corr_parts = []
+        corr_all_parts = []
+        stdL_parts = []
+        stdR_parts = []
 
-        # 7. Coordenadas dos centros (X, Y)
-        x_coords = self.x_vals[IX]
-        y_coords = self.y_vals[IY]
-        xyz_final = cp.stack([x_coords, y_coords, z_best], axis=1)  # (Nc, 3)
+        # 5. Processa por batch de Nc
+        for i in range(0, Nc, batch_size):
+            end = min(i + batch_size, Nc)
+            idx_range = slice(i, end)
 
-        # 8. Limpeza de memória
-        del interp_L_kernels, interp_R_kernels, stdL_kernels, stdR_kernels
-        cp.get_default_memory_pool().free_all_blocks()
-        gc.collect()
+            idx_kernels = kernels_idx[idx_range]  # (B, Kx, Ky, Nz)
+            IX_batch = IX[idx_range]
+            IY_batch = IY[idx_range]
+
+            # Extrair blocos interpolados (B, Kx, Ky, Nz, T)
+            interp_L_k = interp_L[idx_kernels]
+            interp_R_k = interp_R[idx_kernels]
+            std_L_k = std_L_map[idx_kernels]
+            std_R_k = std_R_map[idx_kernels]
+            # print('interp_L_k', interp_L_k.shape)
+            assert interp_L_k.shape[3] == Nz
+            # Correlação vetorizada por Z
+            corr_all, corr_max, z_best = self.spatial_temp_correl(interp_L_k, interp_R_k, batch_size=batch_size)
+
+            # Textura média por bloco
+            stdL = cp.mean(cp.std(std_L_k, axis=-1), axis=(1, 2))
+            stdR = cp.mean(cp.std(std_R_k, axis=-1), axis=(1, 2))
+
+            # Coordenadas dos centros (x, y, z_best)
+            x_coords = self.x_vals[IX_batch]
+            y_coords = self.y_vals[IY_batch]
+            xyz = cp.stack([x_coords, y_coords, z_best], axis=1)
+
+            # Acumula batch
+            xyz_parts.append(xyz)
+            corr_parts.append(corr_max)
+            corr_all_parts.append(corr_all)
+            stdL_parts.append(stdL)
+            stdR_parts.append(stdR)
+
+            # Libera memória
+            del interp_L_k, interp_R_k, std_L_k, std_R_k
+            cp.get_default_memory_pool().free_all_blocks()
+            gc.collect()
+
+        # 6. Concatenar todos os resultados
+        xyz_final = cp.concatenate(xyz_parts, axis=0)
+        corr_max = cp.concatenate(corr_parts, axis=0)
+        corr_all = cp.concatenate(corr_all_parts, axis=0)
+        stdL_final = cp.concatenate(stdL_parts, axis=0)
+        stdR_final = cp.concatenate(stdR_parts, axis=0)
 
         return xyz_final, corr_max, corr_all, stdL_final, stdR_final
     
 
-    def spatial_temp_correl(self, interp_L_kernels, interp_R_kernels):
+    def spatial_temp_correl(self, interp_L_kernels, interp_R_kernels, batch_size=None):
         """
-        Aplica correlação de Pearson entre blocos interpolados (L e R) reduzidos
-        sobre os eixos espaciais (Kx, Ky) e temporais (T), para cada fatia Nz.
+        Aplica correlação de Pearson entre blocos (Nc, Kx, Ky, Nz, T)
+        usando todos os valores espaço-temporais (Kx × Ky × T) como vetor de entrada.
 
-        Parâmetros:
-            interp_L_kernels : cp.ndarray, shape (Nc, Kx, Ky, Nz, T)
-            interp_R_kernels : cp.ndarray, shape (Nc, Kx, Ky, Nz, T)
+        Corrige o problema de T=1 mantendo a equação unificada para qualquer T.
 
         Retorna:
-            corr_all  : (Nc, Nz)  correlação para cada voxel e profundidade
-            corr_max  : (Nc,)     maior valor de correlação por voxel
-            z_best    : (Nc,)     valor Z correspondente à melhor correlação
+            corr_all : (Nc, Nz)
+            corr_max : (Nc,)
+            z_best   : (Nc,)
         """
-        # 1. Reduz sobre (Kx, Ky) → (Nc, Nz, T)
-        L_meaned = cp.mean(interp_L_kernels, axis=(1, 2))  # (Nc, Nz, T)
-        R_meaned = cp.mean(interp_R_kernels, axis=(1, 2))  # (Nc, Nz, T)
+        Nc, Kx, Ky, Nz, T = interp_L_kernels.shape
+        K = Kx * Ky * T
 
-        Nc, Nz, T = L_meaned.shape
+        corr_parts = []
 
-        # 2. Reformatar para correlação vetorizada
-        L_flat = L_meaned.reshape(-1, T)  # (Nc*Nz, T)
-        R_flat = R_meaned.reshape(-1, T)
+        for i in range(0, Nc, batch_size):
+            end = min(i + batch_size, Nc)
+            L_batch = interp_L_kernels[i:end]  # (B, Kx, Ky, Nz, T)
+            R_batch = interp_R_kernels[i:end]
 
-        # 3. Pearson entre blocos (em T)
-        L_mu = cp.mean(L_flat, axis=1, keepdims=True)
-        R_mu = cp.mean(R_flat, axis=1, keepdims=True)
+            B = L_batch.shape[0]
 
-        Lz = L_flat - L_mu
-        Rz = R_flat - R_mu
+            # 1. Achata Kx × Ky × T em um vetor por voxel (B, K, Nz)
+            L_flat = L_batch.transpose(0, 3, 1, 2, 4).reshape(B * Nz, K)
+            R_flat = R_batch.transpose(0, 3, 1, 2, 4).reshape(B * Nz, K)
 
-        num = cp.sum(Lz * Rz, axis=1)
-        den = cp.sqrt(cp.sum(Lz**2, axis=1) * cp.sum(Rz**2, axis=1))
+            # 2. Correlação de Pearson
+            L_mu = cp.mean(L_flat, axis=1, keepdims=True)
+            R_mu = cp.mean(R_flat, axis=1, keepdims=True)
 
-        corr_flat = num / cp.maximum(den, 1e-10)  # (Nc*Nz,)
-        corr_all = corr_flat.reshape(Nc, Nz)      # (Nc, Nz)
+            Lz = L_flat - L_mu
+            Rz = R_flat - R_mu
 
-        # 4. Melhor correlação e profundidade
-        corr_max = cp.nanmax(corr_all, axis=1)      # (Nc,)
-        z_best_idx = cp.nanargmax(corr_all, axis=1) # (Nc,)
-        z_best = self.z_vals[z_best_idx]            # (Nc,)
+            num = cp.sum(Lz * Rz, axis=1)
+            den = cp.sqrt(cp.sum(Lz ** 2, axis=1) * cp.sum(Rz ** 2, axis=1))
 
-        # 5. Limpeza de memória
-        del L_meaned, R_meaned, L_flat, R_flat, L_mu, R_mu, Lz, Rz, num, den
-        cp.get_default_memory_pool().free_all_blocks()
-        gc.collect()
+            corr_flat = num / cp.maximum(den, 1e-10)     # (B * Nz,)
+            corr_batch = corr_flat.reshape(B, Nz)        # (B, Nz)
 
+            corr_parts.append(corr_batch)
+
+            # Limpeza de memória
+            del L_batch, R_batch, Lz, Rz, L_flat, R_flat
+            cp.get_default_memory_pool().free_all_blocks()
+            gc.collect()
+
+        # 3. Concatenar todos os batches
+        corr_all = cp.concatenate(corr_parts, axis=0)  # (Nc, Nz)
+        corr_max = cp.nanmax(corr_all, axis=1)         # (Nc,)
+        z_best_idx = cp.nanargmax(corr_all, axis=1)
+        z_best = self.z_vals[z_best_idx]               # (Nc,)
 
         return corr_all, corr_max, z_best
-        """
-        Calculate the cross-correlation between two sets of images over time using CuPy for GPU acceleration,
-        while limiting GPU memory usage and handling variable batch sizes.
-
-        Parameters:
-        left_Igray: (num_points, num_images) array of left images in grayscale.
-        right_Igray: (num_points, num_images) array of right images in grayscale.
-        Returns:
-        ho: Cross-correlation values.
-        hmax: Maximum correlation values.
-        Imax: Indices of maximum correlation values.
-        ho_ztep: List of correlation values for all Z value of each XY.
-        """
-
-        # Initialize outputs with the correct data type (float32 for memory efficiency)
-        ho = cp.empty(left_Igray.shape[0], dtype=cp.float32)
-
-
-        # Load only the current batch into the GPU
-        batch_left = cp.asarray(left_Igray, dtype=cp.float32)
-        batch_right = cp.asarray(right_Igray, dtype=cp.float32)
-
-        # Debug: Check the batch size
-        # print(f"Processing batch {i // points_per_batch + 1}, size: {batch_size}")
-
-        # Mean values along time (for the current batch)
-        left_mean_batch = cp.mean(batch_left, axis=1, keepdims=True)
-        right_mean_batch = cp.mean(batch_right, axis=1, keepdims=True)
-
-        # Calculate the numerator and denominator for the correlation
-        num = cp.sum((batch_left - left_mean_batch) * (batch_right - right_mean_batch), axis=1)
-        left_sq_diff = cp.sum((batch_left - left_mean_batch) ** 2, axis=1)
-        right_sq_diff = cp.sum((batch_right - right_mean_batch) ** 2, axis=1)
-
-        den = cp.sqrt(left_sq_diff * right_sq_diff)
-        ho_batch = num / cp.maximum(den, 1e-10)
-
-        # Store the results for this batch
-        ho = ho_batch
-
-        # Release memory after processing each batch
-        del batch_left, batch_right, left_mean_batch, right_mean_batch, ho_batch
-        cp.get_default_memory_pool().free_all_blocks()
-        gc.collect()
-
-
-        return ho

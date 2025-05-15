@@ -36,11 +36,11 @@ def save_point_cloud(filename, xyz, corr=None, delimiter=','):
 
 def main():
     # Paths for yaml file and images
-    yaml_file = 'SM3_20250509.yaml'
-    images_path = '20250513_1505_step10_plano_d3'
+    yaml_file = 'cfg/SM3_20250509.yaml'
+    images_path = '20250513_step10_plano_d2'
 
     # Output path
-    output_path = '{}-{}-correl'.format(images_path,time.strftime("%Y%m%d"))
+    output_path = '{}-{}-correl'.format(time.strftime("%Y%m%d"), images_path)
     os.makedirs(output_path, exist_ok=True)
 
     t0 = time.time()
@@ -50,27 +50,35 @@ def main():
     t1 = time.time()
     print('Open Correlation images: {} s'.format(round(t1 - t0, 2)))
     # Grid search parameters
-    n_imgs_v = [5, 10, 15, 20, 25, 30]
-    kernel_size = [3, 5, 7]
+    n_imgs_v = [1,2,3,4,5,6,7,8,9, 10, 15, 20]
+    kernel_size = [1, 3, 5, 7]
     
     # Dictionary to store correlation data of one point
     correl_data = {str(n): {str(k): [] for k in kernel_size} for n in n_imgs_v}
 
 
     # Determine XYZ bounds #(min, max)
-    x_lim = (150, 200) 
-    y_lim = (50, 100)
-    z_lim = (190, 250)
+    # D3
+    # x_lim = (50, 300) 
+    # y_lim = (0, 130)
+    # z_lim = (200, 300)
+    # D2
+    x_lim = (50, 300) 
+    y_lim = (0, 130)
+    z_lim = (-120, 0)
+
     # Step size for point cloud
     dxyz = (0.5, 1) #xy step, z step
+    # n_imgs_v = [20]
+    # kernel_size = [7]
 
     for n_img in n_imgs_v:
         for kernel in kernel_size:
             print('======== Number of images: {}'.format(n_img))
             print('======== Kernel size: {}'.format(kernel))
 
-            Zscan = StereoTemporalSpatialCorrel(yaml_file=yaml_file)
 
+            Zscan = StereoTemporalSpatialCorrel(yaml_file=yaml_file)
             # Read images to process based on n_img
             left_imgs = Zscan.read_images(path=os.path.join(images_path,'left'), images_list=left_imgs_list, n_imgs=n_img)
             right_imgs = Zscan.read_images(path=os.path.join(images_path,'right'), images_list=right_imgs_list, n_imgs=n_img)
@@ -79,12 +87,13 @@ def main():
             # print('Open Correlation images: {}'.format(n_img))
             t2 = time.time()
             # construct 3D points
-            Zscan.points3d(x_lim=x_lim[:2], y_lim=y_lim[:2], z_lim=z_lim[:2], xy_step=dxyz[0], z_step=dxyz[1])
+            Zscan.points3d(x_lim=x_lim, y_lim=y_lim, z_lim=z_lim, xy_step=dxyz[0], z_step=dxyz[1])
             
             # Perform correlation
             xyz, corr, corr_all, _, _ = Zscan.process(Kx=kernel, Ky=kernel, stride=1, save_correlation=True)
 
             # Convert to numpy arrays
+            print('---- Corrlation time {} s'.format(round(time.time() - t2, 2)))
             xyz = cp.asnumpy(xyz)
             corr = cp.asnumpy(corr)
             corr_all = cp.asnumpy(corr_all)
@@ -93,17 +102,17 @@ def main():
             idx = np.where((xyz[:,0] == np.mean(x_lim[:2])) & (xyz[:,1] == np.mean(y_lim[:2])))[0]
             print('xyz', xyz[idx])
             print('corr', corr[idx])
+            print('xyz shape', xyz.shape)
+            print('corr shape', corr.shape)
+            print('Max corr', np.max(corr))
             correl_data[str(n_img)][str(kernel)] = corr_all[idx]
-
-            #xyz = xyz[corr > 0.9]
-            print('1st Corrlation time {} s'.format(round(time.time() - t2, 2)))
             xyz = xyz[corr > 0.95]
             corr = corr[corr > 0.95]
             np.savetxt(os.path.join(output_path, 'correl_imgs{}_kernel{}.txt'.format(n_img, kernel, n_img)), xyz, delimiter=',')
-            filtered_xyz, filtered_corr = Zscan.filter_sparse_points(xyz=xyz, corr=corr, min_neighbors=5, radius=10)
-            np.savetxt(os.path.join(output_path, 'correl_filtered_imgs{}_kernel{}.txt'.format(n_img, kernel, n_img)), filtered_xyz, delimiter=',')
-
+            # filtered_xyz, filtered_corr = Zscan.filter_sparse_points(xyz=xyz, corr=corr, min_neighbors=5, radius=10)
+            # np.savetxt(os.path.join(output_path, 'correl_filtered_imgs{}_kernel{}.txt'.format(n_img, kernel, n_img)), filtered_xyz, delimiter=',')
             # Zscan.plot_3d_points(xyz[:,0], xyz[:,1], xyz[:,2], color=corr, title='xyz')
+   
     np.save(os.path.join(output_path, 'correl.npy'.format(n_img, kernel)), correl_data)
 
 
