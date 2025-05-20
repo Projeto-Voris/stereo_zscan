@@ -22,7 +22,7 @@ class StereoTemporalSpatialCorrel:
         self.read_yaml_file(yaml_file)
 
 
-        self.max_gpu_usage = self.set_datalimit() // 5
+        self.max_gpu_usage = self.set_datalimit() // 3
 
         # self.uv_left = []
         # self.uv_right = []
@@ -403,19 +403,19 @@ class StereoTemporalSpatialCorrel:
         pad_y = Ky // 2
 
         # Índices válidos dos centros no plano XY (evitando bordas)
-        ix_centers = cp.arange(pad_x, Nx - pad_x, stride)
-        iy_centers = cp.arange(pad_y, Ny - pad_y, stride)
+        ix_centers = np.arange(pad_x, Nx - pad_x, stride)
+        iy_centers = np.arange(pad_y, Ny - pad_y, stride)
 
-        IX, IY = cp.meshgrid(ix_centers, iy_centers, indexing='ij')
+        IX, IY = np.meshgrid(ix_centers, iy_centers, indexing='ij')
         IX = IX.ravel()  # (Nc,)
         IY = IY.ravel()
 
         Nc = IX.size  # número total de centros
 
         # Offsets relativos do kernel
-        off_x = cp.arange(-pad_x, pad_x + 1)  # (Kx,)
-        off_y = cp.arange(-pad_y, pad_y + 1)  # (Ky,)
-        off_z = cp.arange(0, Nz)              # Kz = Nz (usa todo Z disponível)
+        off_x = np.arange(-pad_x, pad_x + 1)  # (Kx,)
+        off_y = np.arange(-pad_y, pad_y + 1)  # (Ky,)
+        off_z = np.arange(0, Nz)              # Kz = Nz (usa todo Z disponível)
 
         # Índices absolutos para cada centro
         x_idx = IX[:, None] + off_x[None, :]  # (Nc, Kx)
@@ -435,103 +435,10 @@ class StereoTemporalSpatialCorrel:
 
         return kernels_idx, (IX, IY)
 
-    def process(self, Kx=5, Ky=5, stride=1, save_correlation=False, batch_size=None):
-        """
-        Executa reconstrução estéreo espaço-temporal usando referência por índices de voxel.
-
-        Usa projeção e interpolação uma única vez por ponto, evitando redundância.
-
-        Retorna:
-            xyz_final     (N, 3): centros com melhor Z
-            corr_final    (N,): maior correlação por kernel
-            corr_all      (Nc, Nz): correlação para cada voxel e profundidade
-            stdL_final    (N,): desvio padrão médio da textura L
-            stdR_final    (N,): desvio padrão médio da textura R
-        """
-        Nx, Ny, Nz = self.grid.shape[:3]
-        T = self.left_images.shape[2]
-
-        if batch_size is None:
-            batch_size = self.estimate_batch_size(Kx, Ky, Nz, T, safety_margin=0.5)
-            print(f"[INFO] Using estimated batch_size = {batch_size}")
-
-        grid_flat = self.grid.reshape(-1, 3)  # (N, 3)
-        self.grid_indices = cp.arange(Nx * Ny * Nz).reshape(Nx, Ny, Nz)
-
-        # 3. Projeção estéreo para pontos únicos
-        uv_left = self.transform_gcs2ccs(grid_flat, cam_name='left')
-        uv_right = self.transform_gcs2ccs(grid_flat, cam_name='right')
-
-        # 4. Interpolação bilinear dos pontos únicos
-        interp_L, std_L_map = self.bi_interpolation(self.left_images, uv_left)
-        interp_R, std_R_map = self.bi_interpolation(self.right_images, uv_right)
-
-        # 5. Construir mapas indexáveis (por voxel_id)
-        kernels_idx, (IX, IY) = self.get_kernel_indices(Kx=Kx, Ky=Ky, stride=stride)  # (Nc, Kx, Ky, Nz)
-        Nc, Kx, Ky, Nz = kernels_idx.shape
-
-
-    # 4. Inicializa listas para acumular resultados
-        xyz_parts = []
-        corr_parts = []
-        corr_all_parts = []
-        stdL_parts = []
-        stdR_parts = []
-
-        # 5. Processa por batch de Nc
-        for i in range(0, Nc, batch_size):
-            end = min(i + batch_size, Nc)
-            idx_range = slice(i, end)
-
-            idx_kernels = kernels_idx[idx_range]  # (B, Kx, Ky, Nz)
-            IX_batch = IX[idx_range]
-            IY_batch = IY[idx_range]
-
-            # Extrair blocos interpolados (B, Kx, Ky, Nz, T)
-            interp_L_k = interp_L[idx_kernels]
-            interp_R_k = interp_R[idx_kernels]
-            std_L_k = std_L_map[idx_kernels]
-            std_R_k = std_R_map[idx_kernels]
-            # print('interp_L_k', interp_L_k.shape)
-            assert interp_L_k.shape[3] == Nz
-            # Correlação vetorizada por Z
-            corr_all, corr_max, z_best = self.spatial_temp_correl(interp_L_k, interp_R_k, batch_size=batch_size)
-
-            # Textura média por bloco
-            stdL = cp.mean(cp.std(std_L_k, axis=-1), axis=(1, 2))
-            stdR = cp.mean(cp.std(std_R_k, axis=-1), axis=(1, 2))
-
-            # Coordenadas dos centros (x, y, z_best)
-            x_coords = self.x_vals[IX_batch]
-            y_coords = self.y_vals[IY_batch]
-            xyz = cp.stack([x_coords, y_coords, z_best], axis=1)
-
-            # Acumula batch
-            xyz_parts.append(xyz)
-            corr_parts.append(corr_max)
-            corr_all_parts.append(corr_all)
-            stdL_parts.append(stdL)
-            stdR_parts.append(stdR)
-
-            # Libera memória
-            del interp_L_k, interp_R_k, std_L_k, std_R_k
-            cp.get_default_memory_pool().free_all_blocks()
-            gc.collect()
-
-        # 6. Concatenar todos os resultados
-        xyz_final = cp.concatenate(xyz_parts, axis=0)
-        corr_max = cp.concatenate(corr_parts, axis=0)
-        corr_all = cp.concatenate(corr_all_parts, axis=0)
-        stdL_final = cp.concatenate(stdL_parts, axis=0)
-        stdR_final = cp.concatenate(stdR_parts, axis=0)
-
-        return xyz_final, corr_max, corr_all, stdL_final, stdR_final
-    
-
     def spatial_temp_correl(self, interp_L_kernels, interp_R_kernels, batch_size=None):
         """
         Aplica correlação de Pearson entre blocos (Nc, Kx, Ky, Nz, T)
-        usando todos os valores espaço-temporais (Kx × Ky × T) como vetor de entrada.
+        usando todos os valores espaço-temporais (Kx  Ky  T) como vetor de entrada.
 
         Corrige o problema de T=1 mantendo a equação unificada para qualquer T.
 
@@ -583,3 +490,232 @@ class StereoTemporalSpatialCorrel:
         z_best = self.z_vals[z_best_idx]               # (Nc,)
 
         return corr_all, corr_max, z_best
+
+    def process(self, Kx=5, Ky=5, stride=1, batch_size=None, y_offset=0):
+        """
+        Executa reconstrução estéreo espaço-temporal usando referência por índices de voxel.
+
+        Usa projeção e interpolação uma única vez por ponto, evitando redundância.
+
+        Retorna:
+            xyz_final     (N, 3): centros com melhor Z
+            corr_final    (N,): maior correlação por kernel
+            corr_all      (Nc, Nz): correlação para cada voxel e profundidade
+            stdL_final    (N,): desvio padrão médio da textura L
+            stdR_final    (N,): desvio padrão médio da textura R
+        """
+        Nx, Ny, Nz = self.grid.shape[:3]
+        T = self.left_images.shape[2]
+
+        if batch_size is None:
+            batch_size = self.estimate_batch_size(Kx, Ky, Nz, T, safety_margin=0.5)
+            print(f"[INFO] Using estimated batch_size = {batch_size}")
+
+        grid_flat = self.grid.reshape(-1, 3)  # (N, 3)
+        self.grid_indices = np.arange(Nx * Ny * Nz).reshape(Nx, Ny, Nz)
+
+        # 3. Projeção estéreo para pontos únicos
+        uv_left = self.transform_gcs2ccs(grid_flat, cam_name='left')
+        uv_right = self.transform_gcs2ccs(grid_flat, cam_name='right')
+
+        # 4. Interpolação bilinear dos pontos únicos
+        interp_L, std_L_map = self.bi_interpolation(self.left_images, uv_left)
+        interp_R, std_R_map = self.bi_interpolation(self.right_images, uv_right)
+
+        # 5. Construir mapas indexáveis (por voxel_id)
+        kernels_idx, (IX, IY) = self.get_kernel_indices(Kx=Kx, Ky=Ky, stride=stride)  # (Nc, Kx, Ky, Nz)
+        Nc, Kx, Ky, Nz = kernels_idx.shape
+
+
+    # 4. Inicializa listas para acumular resultados
+        xyz_parts = []
+        corr_parts = []
+        corr_all_parts = []
+        stdL_parts = []
+        stdR_parts = []
+
+        # 5. Processa por batch de Nc
+        for i in range(0, Nc, batch_size):
+            end = min(i + batch_size, Nc)
+            idx_range = slice(i, end)
+
+            idx_kernels = kernels_idx[idx_range]  # (B, Kx, Ky, Nz)
+            IX_batch = IX[idx_range]
+            IY_batch = IY[idx_range]
+
+            # Extrair blocos interpolados (B, Kx, Ky, Nz, T)
+            interp_L_k = interp_L[idx_kernels]
+            interp_R_k = interp_R[idx_kernels]
+            std_L_k = std_L_map[idx_kernels]
+            std_R_k = std_R_map[idx_kernels]
+            # print('interp_L_k', interp_L_k.shape)
+            assert interp_L_k.shape[3] == Nz
+            # Correlação vetorizada por Z
+            corr_all, corr_max, z_best = self.spatial_temp_correl(interp_L_k, interp_R_k, batch_size=batch_size)
+
+            # Textura média por bloco
+            stdL = cp.mean(cp.std(std_L_k, axis=-1), axis=(1, 2))
+            stdR = cp.mean(cp.std(std_R_k, axis=-1), axis=(1, 2))
+
+            # Coordenadas dos centros (x, y, z_best)
+            x_coords = self.x_vals[IX_batch]
+            y_coords = self.y_vals[IY_batch + y_offset]
+            xyz = cp.stack([x_coords, y_coords, z_best], axis=1)
+
+            # Acumula batch
+            xyz_parts.append(xyz)
+            corr_parts.append(corr_max)
+            corr_all_parts.append(corr_all)
+            stdL_parts.append(stdL)
+            stdR_parts.append(stdR)
+
+            # Libera memória
+            del interp_L_k, interp_R_k, std_L_k, std_R_k
+            cp.get_default_memory_pool().free_all_blocks()
+            gc.collect()
+
+        # 6. Concatenar todos os resultados
+        xyz_final = cp.concatenate(xyz_parts, axis=0)
+        corr_max = cp.concatenate(corr_parts, axis=0)
+        corr_all = cp.concatenate(corr_all_parts, axis=0)
+        stdL_final = cp.concatenate(stdL_parts, axis=0)
+        stdR_final = cp.concatenate(stdR_parts, axis=0)
+
+        return xyz_final, corr_max, corr_all, stdL_final, stdR_final
+    
+
+    def process_segmented_y(self, Kx=5, Ky=5, stride=1, batch_size=None, block_size_y=2, save_correlation=False):
+        """
+        Processa o grid 3D em fatias ao longo de Y para evitar estouro de memória GPU.
+        """
+
+        
+        Ny_total = self.grid.shape[1]
+        T = self.left_images.shape[2]
+
+
+
+        xyz_all = []
+        corr_all = []
+        corrmap_all = []
+        stdL_all = []
+        stdR_all = []
+        grid_backup = self.grid
+
+        for y0 in range(0, Ny_total, block_size_y):
+            y1 = min(y0 + block_size_y, Ny_total)
+
+            # Salvar original
+
+            # Fatia da grade
+            self.grid = grid_backup[:, y0:y1, :, :]
+            Nx, Ny, Nz = self.grid.shape[:3]
+            self.grid_flat = self.grid.reshape(-1, 3)
+            self.grid_indices = cp.arange(Nx * Ny * Nz).reshape(Nx, Ny, Nz)
+
+            if batch_size is None:
+                batch_size = self.estimate_batch_size(Kx, Ky, Nz, T, safety_margin=0.5)
+                print(f"[INFO] Using estimated batch_size = {batch_size}")
+
+            # Chama o pipeline normal
+            xyz, corr, corrmap, stdL, stdR = self.process(
+                Kx=Kx, Ky=Ky, stride=stride, batch_size=batch_size, save_correlation=save_correlation, y_offset=y0
+            )
+
+            # Acumula
+            xyz_all.append(xyz)
+            corr_all.append(corr)
+            corrmap_all.append(corrmap)
+            stdL_all.append(stdL)
+            stdR_all.append(stdR)
+
+            # Libera memória
+            cp.get_default_memory_pool().free_all_blocks()
+            gc.collect()
+
+
+        # Concatena todos os resultados
+        xyz_final = cp.concatenate(xyz_all, axis=0)
+        corr_final = cp.concatenate(corr_all, axis=0)
+        corrmap_final = cp.concatenate(corrmap_all, axis=0) #if save_correlation else None
+        stdL_final = cp.concatenate(stdL_all, axis=0)
+        stdR_final = cp.concatenate(stdR_all, axis=0)
+
+        return xyz_final, corr_final, corrmap_final, stdL_final, stdR_final
+    
+    def process_segmented_z(self, Kx=5, Ky=5, stride=1, batch_size=None, Nz_block=50, save_correlation=False):
+        """
+        Segmenta o volume ao longo de Z para reduzir uso de memória.
+        Reutiliza self.process() e acumula o melhor valor de correlação por voxel.
+
+        Retorna:
+            xyz_final     (Nc, 3)
+            corr_final    (Nc,)
+            corr_all      (Nc, Nz_total)
+            stdL_final    (Nc,)
+            stdR_final    (Nc,)
+        """
+        Nx, Ny, Nz_total = self.grid.shape[:3]
+        self.grid_flat = self.grid.reshape(-1, 3)
+        grid_backup = self.grid
+        _, _, z_vals = self.x_vals, self.y_vals, self.z_vals
+
+        # Pré-processa grid completo para saber centros
+        self.grid_indices = np.arange(Nx * Ny * Nz_total).reshape(Nx, Ny, Nz_total)
+        kernels_idx, (IX, IY) = self.get_kernel_indices(Kx=Kx, Ky=Ky, stride=stride)
+        Nc = IX.shape[0]
+
+        # Inicializa acumuladores
+        corr_max = cp.full((Nc,), -cp.inf, dtype=cp.float32)
+        z_best = cp.zeros((Nc,), dtype=cp.float32)
+        stdL_all = []
+        stdR_all = []
+        corr_all_blocks = []
+
+        for z0 in range(0, Nz_total, Nz_block):
+            z1 = min(z0 + Nz_block, Nz_total)
+
+            # Fatia grid ao longo de Z
+            self.grid = grid_backup[:, :, z0:z1, :]
+            self.z_vals = z_vals[z0:z1]
+
+            print(f"[Z-SEGMENT] Processing z = {z0} to {z1} ({z1 - z0} slices)")
+
+            # Atualiza auxiliares
+            self.grid_flat = self.grid.reshape(-1, 3)
+            self.grid_indices = np.arange(self.grid.size // 3).reshape(self.grid.shape[:3])
+
+            # Executa correlação parcial
+            xyz, corr, corr_block, stdL, stdR = self.process(Kx=Kx, Ky=Ky, stride=stride)
+
+            if corr.shape[0] != Nc:
+                raise ValueError("Número de centros mudou entre blocos de Z. Verifique stride, Kx/Ky e fatia.")
+
+            if save_correlation:
+                corr_all_blocks.append(corr_block)
+
+            # Atualiza máximos
+            improved = corr > corr_max
+            corr_max[improved] = corr[improved]
+            z_best[improved] = xyz[improved, 2]  # usa Z do centro local
+
+            stdL_all.append(stdL)
+            stdR_all.append(stdR)
+
+            cp.get_default_memory_pool().free_all_blocks()
+            gc.collect()
+
+        # Restaura grid original
+        self.grid = grid_backup
+        self.z_vals = z_vals
+
+        # Reconstrói coordenadas finais (x, y) + melhor Z
+        x_coords = self.x_vals[IX]
+        y_coords = self.y_vals[IY]
+        xyz_final = cp.stack([x_coords, y_coords, z_best], axis=1)
+
+        stdL_final = 0 #cp.mean(cp.stack(stdL_all, axis=0), axis=0)
+        stdR_final = 0 #cp.mean(cp.stack(stdR_all, axis=0), axis=0)
+        corr_all = cp.concatenate(corr_all_blocks, axis=1) if save_correlation else None
+
+        return xyz_final, corr_max, corr_all, stdL_final, stdR_final

@@ -59,15 +59,15 @@ def calculate_and_plot_uv_differences(uv_points):
 def main():
     # Paths for yaml file and images
     yaml_file = 'cfg/SM3_20250509.yaml'
-    images_path = '20250513_step10_plano_d2'
+    images_path = '/home/daniel/Insync/daniel.regner@labmetro.ufsc.br/Google Drive - Shared drives/VORIS - Media/Experimentos/SM3 - Padrão aleatório/2025 IMEKO - Imagens/20250513_1505_step10_plano_d2'
     left_imgs_list = sorted(os.listdir(os.path.join(images_path, 'left')))
 
     right_imgs_list = sorted(os.listdir(os.path.join(images_path, 'right')))
     # images_path = '/home/daniel/Pictures/sm3'
-    n_img = 30
-    x_lim = (75, 325) 
-    y_lim = (-50, 150)
-    z_lim = (-120, 0)
+    n_img = 1
+    x_lim = (0, 400) 
+    y_lim = (-100, 300)
+    z_lim = (-400, 400)
     dxyz = (25, 10) #xy step, z step
 
     Zscan = InverseTriangulation(yaml_file=yaml_file)
