@@ -5,7 +5,7 @@ import cupy as cp
 import gc
 import matplotlib.pyplot as plt
 
-from extras.debugger import plot_points_on_image, show_stereo_images
+from extras.debugger import plot_points_on_image, show_stereo_images_named
 from include.InverseTriangulation import InverseTriangulation
 import extras.project_points as project_points
 
@@ -59,15 +59,18 @@ def calculate_and_plot_uv_differences(uv_points):
 def main():
     # Paths for yaml file and images
     yaml_file = 'cfg/SM3_20250509.yaml'
-    images_path = '/home/daniel/Insync/daniel.regner@labmetro.ufsc.br/Google Drive - Shared drives/VORIS - Media/Experimentos/SM3 - Padrão aleatório/2025 IMEKO - Imagens/20250513_1505_step10_plano_d2'
+    # images_path = '/home/daniel/Insync/daniel.regner@labmetro.ufsc.br/Google Drive - Shared drives/VORIS - Media/Experimentos/SM3 - Padrão aleatório/2025 IMEKO - Imagens/20250513_1505_step10_plano_d2'
+    images_path = '/home/daniel/Insync/daniel.regner@labmetro.ufsc.br/Google Drive - Shared drives/VORIS - Media/Experimentos/SM3 - Padrão aleatório/2025 IMEKO - Imagens/20250513_1505_step10_calota_d2'
+
     left_imgs_list = sorted(os.listdir(os.path.join(images_path, 'left')))
 
     right_imgs_list = sorted(os.listdir(os.path.join(images_path, 'right')))
     # images_path = '/home/daniel/Pictures/sm3'
     n_img = 1
-    x_lim = (0, 400) 
-    y_lim = (-100, 300)
-    z_lim = (-400, 400)
+    # Determine XYZ bounds #(min, max)
+    x_lim = (-100, 500) 
+    y_lim = (-200, 500)
+    z_lim = (-0, 10)
     dxyz = (25, 10) #xy step, z step
 
     Zscan = InverseTriangulation(yaml_file=yaml_file)
@@ -90,7 +93,7 @@ def main():
                                                    thickness=-1)
 
 
-    show_stereo_images(output_image_L, output_image_R, "Remaped points")
+    show_stereo_images_named(output_image_L, output_image_R, "Remaped points")
     cv2.waitKey(0)
 
     mask_left = (uv_left < 0) | (uv_left > left_imgs[0].shape[1])

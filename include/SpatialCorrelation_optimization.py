@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 import cv2
 import gc
 from scipy.spatial import cKDTree
+from sklearn.cluster import DBSCAN
 
 class StereoTemporalSpatialCorrel:
     def __init__(self, yaml_file):
@@ -330,19 +331,25 @@ class StereoTemporalSpatialCorrel:
         return interpolated_all, std_all
 
 
-    def filter_sparse_points(self, xyz_gpu, corr_gpu, min_neighbors=5, radius=10):
-        xyz_cpu = cp.asnumpy(xyz_gpu)
-        corr_cpu = cp.asnumpy(corr_gpu)
+    def filter_sparse_points(self, xyz, corr, min_neighbors=5, radius=10):
 
-        if xyz_cpu.shape[0] == 0:
-            return cp.empty_like(xyz_gpu), cp.empty_like(corr_gpu)
 
-        tree = cKDTree(xyz_cpu)
-        neighbor_counts = tree.query_ball_point(xyz_cpu, r=radius)
-        neighbor_counts = np.array([len(neighbors) for neighbors in neighbor_counts])
+        if xyz.shape[0] == 0:
+            return np.empty_like(xyz), np.empty_like(corr)
+        # Usar cKDTree para encontrar vizinhos dentro do raio especificado
+        tree = cKDTree(xyz)
+        neighbor_counts = tree.query_ball_point(xyz, r=radius)
+        neighbor_counts = np.array([len(neighbors)-1 for neighbors in neighbor_counts])
         dense_mask = neighbor_counts >= min_neighbors
+        xyz = xyz[dense_mask]
+        corr = corr[dense_mask]
+        db = DBSCAN(eps=min_neighbors//2, min_samples=radius//2).fit(xyz)
+        labels = db.labels_
+        mask = labels != -1  # -1 é ruído/outlier
 
-        return cp.asarray(xyz_cpu[dense_mask]), cp.asarray(corr_cpu[dense_mask])
+
+
+        return cp.asarray(xyz[mask]), cp.asarray(corr[mask])
     
     # extract_kernels_fixed e get_kernel_indices podem não ser mais necessários da forma antiga
     # A lógica de extração de kernel agora está dentro de 'process'
