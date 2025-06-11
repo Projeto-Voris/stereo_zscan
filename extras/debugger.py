@@ -376,7 +376,7 @@ def plot_points_on_image(image, points, color=(0, 255, 0), radius=5, thickness=1
     return output_image
 
 
-def show_stereo_images(left, right, name='Rectified Images'):
+def show_stereo_images_named(left, right, name='Rectified Images'):
     combined_image = np.concatenate((left, right), axis=1)
     # combined_image = cv2.line(combined_image, (0,1460), (8000, 1460), (0, 255, 0))
     # combined_image = cv2.line(combined_image, (0,1431), (8000, 1431), (0, 255, 0))

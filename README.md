@@ -1,45 +1,59 @@
 # Stereo Z-Scan
 
-## Overview
+## Descrição
 
-**Stereo Z-Scan** is a project designed to perform high-resolution 3D reconstruction using stereo camera systems. This repository provides the tools and algorithms necessary for capturing and processing stereo images, enabling users to generate detailed 3D models from 2D image pairs.
+O **Stereo Z-Scan** é um projeto para reconstrução 3D de alta resolução utilizando sistemas de câmeras estéreo. Ele oferece ferramentas para captura, processamento e análise de imagens estéreo, permitindo a geração de modelos 3D detalhados a partir de pares de imagens 2D. O processamento é acelerado por GPU (CUDA), tornando o fluxo eficiente mesmo para grandes volumes de dados.
 
-## Features
+---
 
-- **Stereo Image Capture**: Interfaces with stereo cameras to capture synchronized image pairs.
-- **3D Reconstruction**: Implements algorithms for depth estimation and 3D point cloud generation.
-- **Visualization Tools**: Provides utilities for visualizing 3D reconstructions and analyzing the results.
-- **CUDA Acceleration**: Utilizes GPU processing for improved performance in depth estimation and 3D modeling.
+## Principais Funcionalidades
 
-## Requirements
+- **Captura de Imagens Estéreo**: Integração com sistemas de câmeras estéreo para aquisição sincronizada de imagens.
+- **Reconstrução 3D**: Algoritmos para estimação de profundidade e geração de nuvens de pontos 3D.
+- **Visualização**: Ferramentas para visualização e análise dos resultados em 3D.
+- **Aceleração CUDA**: Uso de GPU para acelerar etapas críticas do processamento.
+- **Filtros Espaciais e Temporais**: Métodos para correlação espaço-temporal e filtragem de pontos esparsos.
 
-- **Hardware**: 
-  - Stereo camera system (e.g., Spinnaker camera)
-  - GPU with CUDA support (recommended for acceleration)
+---
 
-- **Software**:
-  - Python 3.x
-  - OpenCV 4.x
-  - [Spinnaker SDK for Python](https://www.teledynevisionsolutions.com/products/spinnaker-sdk/?model=Spinnaker%20SDK&vertical=machine%20vision&segment=iis)
+## Requisitos
 
-## Installation
+### Hardware
+- Sistema de câmeras estéreo (ex: Spinnaker)
+- GPU compatível com CUDA (recomendado)
 
-1. Clone this repository:
+### Software
+- Python 3.x
+- OpenCV 4.x
+- [Spinnaker SDK for Python](https://www.teledynevisionsolutions.com/products/spinnaker-sdk/?model=Spinnaker%20SDK&vertical=machine%20vision&segment=iis)
+- Cupy (para aceleração CUDA)
+- Matplotlib, NumPy, SciPy
+
+---
+
+## Instalação
+
+1. Clone o repositório:
    ```bash
    git clone https://github.com/Projeto-Voris/stereo_zscan.git
    cd stereo_zscan
-   ```
+  ```
+2. Instale dependências
+  ```bash
+  pip install -r requirements.txt
+  ```
 
-2. Install the required dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
+## Uso
+1. Ajuste os arquivos de configuração em ```cfg/``` conforme seu sistema de câmeras e parâmetros de calibração.
+2. Execute o script principal para processar as imagens e gerar a reconstrução 3D:
+```bash
+  python main_spatial.py
+```
+3. Os resultados (nuvens de pontos, mapas de profundidade, etc.) serão salvos na pasta de saída definida no script.
 
-3. Set up your camera according to the manufacturer's instructions.
+## Organização do Projeto
 
-## Usage
-
-
-Contributions are welcome! Please feel free to submit issues or pull requests. For major changes, please open an issue first to discuss what you would like to change.
-
-
+* main_spatial.py: Pipeline principal para reconstrução 3D.
+* include/SpatialCorrelation.py: Algoritmos de correlação espacial e temporal.
+* extras/: Scripts auxiliares para visualização, depuração e pré-processamento.
+* cfg/: Arquivos de configuração de calibração e parâmetros do sistema.
