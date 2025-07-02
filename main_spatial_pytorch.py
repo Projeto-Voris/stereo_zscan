@@ -31,6 +31,42 @@ def save_point_cloud(
     np.savetxt(filename, data, delimiter=delimiter, header=header_str, comments='')
     print(f"Nuvem de pontos salva em {filename}")
 
+def run_grid_diagnostics(scanner: PyTorchStereoCorrel, limits: dict, steps: dict):
+    """
+    Executa um diagnóstico de sensibilidade do grid, verificando como os passos
+    no espaço 3D se traduzem em movimento de pixels na imagem.
+    """
+    print("\n[Diagnóstico] Calculando a sensibilidade do grid para os parâmetros atuais...")
+    
+    x_mid = limits['x'][0] + (limits['x'][1] - limits['x'][0]) / 2
+    y_mid = limits['y'][0] + (limits['y'][1] - limits['y'][0]) / 2
+    z_mid = limits['z'][0] + (limits['z'][1] - limits['z'][0]) / 2
+
+    p_center = torch.tensor([[x_mid, y_mid, z_mid]], dtype=torch.float32, device=scanner.device)
+    p_step_x = torch.tensor([[x_mid + steps['xy'], y_mid, z_mid]], dtype=torch.float32, device=scanner.device)
+    p_step_z = torch.tensor([[x_mid, y_mid, z_mid + steps['z']]], dtype=torch.float32, device=scanner.device)
+
+    uv_center = scanner.transform_gcs2ccs(p_center, 'left')
+    uv_step_x = scanner.transform_gcs2ccs(p_step_x, 'left')
+    uv_step_z = scanner.transform_gcs2ccs(p_step_z, 'left')
+
+    if uv_center.min() > 0 and uv_step_x.min() > 0 and uv_step_z.min() > 0:
+        dist_pix_x = torch.linalg.norm(uv_step_x - uv_center).item()
+        dist_pix_z = torch.linalg.norm(uv_step_z - uv_center).item()
+
+        print(f"  > Passo XY de {steps['xy']:.1f} mm equivale a um deslocamento de {dist_pix_x:.3f} pixels na imagem.")
+        print(f"  > Passo Z de {steps['z']:.1f} mm equivale a um deslocamento de {dist_pix_z:.3f} pixels na imagem.")
+        
+        if dist_pix_x < 0.5 or dist_pix_z < 0.5:
+            print("  > [AVISO] O passo do grid parece ser MUITO PEQUENO. Considere aumentar os passos do grid.")
+        elif dist_pix_x > 5.0:
+            print("  > [AVISO] O passo do grid pode ser grande, causando perda de correlação espacial.")
+        else:
+            print("  > [INFO] A sensibilidade do grid parece estar em uma faixa razoável.")
+    else:
+        print("  > [ERRO DE DIAGNÓSTICO] O ponto central do ROI não pôde ser projetado na câmera. Verifique os limites.")
+    print("-" * 20)
+
 def main():
     """Função principal para executar o pipeline de correlação estéreo."""
     
@@ -41,7 +77,7 @@ def main():
     KERNEL_SIZES = [3]
     
     GRID_LIMITS = {'x': (0, 400), 'y': (-100, 300), 'z': (-200, 200)}
-    GRID_STEPS = {'xy': 2.0, 'z': 2.0}
+    GRID_STEPS = {'xy': 1.0, 'z': 1.0}
     CORR_THRESHOLD = 0.8
     SPATIAL_FILTER_RADIUS = 10.0
     SPATIAL_FILTER_MIN_NEIGHBORS = 15
@@ -53,8 +89,10 @@ def main():
     t_start_total = time.time()
     
     try:
-        left_imgs_list = sorted([p.name for p in (IMAGES_PATH / 'left').iterdir()])
-        right_imgs_list = sorted([p.name for p in (IMAGES_PATH / 'right').iterdir()])
+        left_path = IMAGES_PATH / 'left'
+        right_path = IMAGES_PATH / 'right'
+        left_imgs_list = sorted([p.name for p in left_path.iterdir()])
+        right_imgs_list = sorted([p.name for p in right_path.iterdir()])
         if not left_imgs_list or not right_imgs_list:
             print(f"Erro: Não foram encontradas imagens em {IMAGES_PATH}")
             return
@@ -62,10 +100,9 @@ def main():
         print(f"Erro: Diretório de imagens não encontrado: {IMAGES_PATH}")
         return
         
-    print(f'Imagens encontradas. Processamento iniciado...')
+    print('Imagens encontradas. Processamento iniciado...')
 
     def read_images_from_disk(path: Path, images_list: list, n_imgs: int) -> list:
-        """Lê um número específico de imagens em escala de cinza de um diretório."""
         return [cv2.imread(str(path / img_name), cv2.IMREAD_GRAYSCALE) for img_name in images_list[:n_imgs]]
 
     for n_img in N_IMGS_OPTIONS:
@@ -77,9 +114,11 @@ def main():
 
             Zscan = PyTorchStereoCorrel(yaml_file=YAML_FILE)
             
+            run_grid_diagnostics(Zscan, GRID_LIMITS, GRID_STEPS)
+
             print(f"Carregando {n_img} pares de imagens...")
-            left_imgs_cpu = read_images_from_disk(IMAGES_PATH / 'left', left_imgs_list, n_img)
-            right_imgs_cpu = read_images_from_disk(IMAGES_PATH / 'right', right_imgs_list, n_img)
+            left_imgs_cpu = read_images_from_disk(left_path, left_imgs_list, n_img)
+            right_imgs_cpu = read_images_from_disk(right_path, right_imgs_list, n_img)
             
             print("Convertendo imagens (CLAHE, Undistort)...")
             Zscan.convert_images(left_imgs_cpu, right_imgs_cpu, apply_clahe=True, undist=True)
@@ -89,10 +128,8 @@ def main():
             print(f"Pré-processamento de imagens concluído em {t_preprocessing_done - t_run_start:.2f} s")
 
             print("Construindo grade 3D e iniciando a correlação...")
-            Zscan.points3d(
-                x_lim=GRID_LIMITS['x'], y_lim=GRID_LIMITS['y'], z_lim=GRID_LIMITS['z'],
-                xy_step=GRID_STEPS['xy'], z_step=GRID_STEPS['z']
-            )
+            Zscan.points3d(x_lim=GRID_LIMITS['x'], y_lim=GRID_LIMITS['y'], z_lim=GRID_LIMITS['z'],
+                           xy_step=GRID_STEPS['xy'], z_step=GRID_STEPS['z'])
             
             xyz_gpu, corr_gpu, _ = Zscan.process_segmented_z(
                 Kx=kernel, Ky=kernel, stride=1, Nz_block_voxels=40
@@ -105,8 +142,7 @@ def main():
                 print(f"Nenhum ponto retornado pelo processamento para {run_key}.")
                 continue
 
-            raw_output_filename = output_path / f'raw_points_{run_key}.csv'
-            save_point_cloud(raw_output_filename, xyz_gpu, corr_gpu)
+            save_point_cloud(output_path / f'raw_points_{run_key}.csv', xyz_gpu, corr_gpu)
 
             print(f"Total de pontos brutos: {xyz_gpu.shape[0]}")
             filter_mask = corr_gpu > CORR_THRESHOLD
@@ -115,29 +151,19 @@ def main():
             print(f"Pontos com correlação > {CORR_THRESHOLD}: {xyz_filtered_gpu.shape[0]}")
             
             if xyz_filtered_gpu.numel() > 0:
-                filtered_output_filename = output_path / f'filtered_points_{run_key}_corr{CORR_THRESHOLD}.csv'
-                save_point_cloud(filtered_output_filename, xyz_filtered_gpu, corr_filtered_gpu)
-                Zscan.plot_3d_points(
-                    xyz_filtered_gpu[:, 0], xyz_filtered_gpu[:, 1], xyz_filtered_gpu[:, 2],
-                    color=corr_filtered_gpu,
-                    title=f'Pontos Filtrados (Corr > {CORR_THRESHOLD}) - {run_key}'
-                )
-                
+                save_point_cloud(output_path / f'filtered_points_{run_key}_corr{CORR_THRESHOLD}.csv', 
+                                 xyz_filtered_gpu, corr_filtered_gpu)
+
                 print("\nAplicando filtro espacial de outliers...")
                 final_xyz_gpu, final_corr_gpu = Zscan.filter_sparse_points(
                     xyz_gpu=xyz_filtered_gpu, corr_gpu=corr_filtered_gpu,
                     min_neighbors=SPATIAL_FILTER_MIN_NEIGHBORS, radius=SPATIAL_FILTER_RADIUS
                 )
                 print(f"Pontos após o filtro espacial: {final_xyz_gpu.shape[0]}")
-
+                
                 if final_xyz_gpu.numel() > 0:
-                    final_output_filename = output_path / f'final_points_{run_key}_rad{SPATIAL_FILTER_RADIUS}_neigh{SPATIAL_FILTER_MIN_NEIGHBORS}.csv'
-                    save_point_cloud(final_output_filename, final_xyz_gpu, final_corr_gpu)
-                    Zscan.plot_3d_points(
-                        final_xyz_gpu[:, 0], final_xyz_gpu[:, 1], final_xyz_gpu[:, 2],
-                        color=final_corr_gpu,
-                        title=f'Nuvem Final com Filtro Espacial - {run_key}'
-                    )
+                    save_point_cloud(output_path / f'final_points_{run_key}_rad{SPATIAL_FILTER_RADIUS}_neigh{SPATIAL_FILTER_MIN_NEIGHBORS}.csv',
+                                     final_xyz_gpu, final_corr_gpu)
 
             t_run_end = time.time()
             print(f"======== Concluído: {run_key} em {t_run_end - t_run_start:.2f} s ========")
@@ -152,4 +178,4 @@ if __name__ == "__main__":
         print(f"GPU detectada: {props.name}, Memória Total: {props.total_memory / (1024**2):.2f} MB")
     else:
         print("GPU não detectada pelo PyTorch. O código será executado na CPU, o que pode ser muito lento.")
-    main() 
+    main()
