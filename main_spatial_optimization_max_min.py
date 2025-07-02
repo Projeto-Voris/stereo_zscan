@@ -5,7 +5,6 @@ import os
 import time
 import gc
 
-# Certifique-se de que o nome do arquivo importado está correto
 from include.SpatialCorrelation_optimization import StereoTemporalSpatialCorrel
 
 
@@ -13,7 +12,6 @@ def save_point_cloud(filename, xyz, corr=None, delimiter=','):
     """
     Salva uma nuvem de pontos para um arquivo.
     """
-    # Garante que os dados estejam na CPU (NumPy) antes de salvar
     if isinstance(xyz, cp.ndarray):
         xyz = cp.asnumpy(xyz)
     if corr is not None and isinstance(corr, cp.ndarray):
@@ -32,7 +30,6 @@ def save_point_cloud(filename, xyz, corr=None, delimiter=','):
     print(f"Nuvem de pontos salva em {filename}")
 
 def main():
-    # --- Configurações Iniciais ---
     yaml_file = 'cfg/SM3_20250509.yaml'
     images_path = '20250513_1505_step10_plano_d2'
     
@@ -55,8 +52,6 @@ def main():
         
     print(f'Imagens encontradas. Processamento iniciado...')
     
-    # --- Parâmetros Fixos para a Execução Principal ---
-    # Para este exemplo, fixamos n_img e kernel. A otimização será nos filtros.
     n_img = 5
     kernel = 3
     
@@ -65,7 +60,6 @@ def main():
     z_lim = (-200, 200)
     dxyz = (2.0, 2.0)
 
-    # --- Execução Única da Etapa Cara (Correlação) ---
     print(f"\n======== Executando a Análise Principal (n_img={n_img}, kernel={kernel}) ========")
     Zscan = StereoTemporalSpatialCorrel(yaml_file=yaml_file)
     
@@ -87,30 +81,23 @@ def main():
     )
     print("  Correlação principal concluída.")
 
-    # Mover os resultados brutos para a CPU para o loop de otimização
     xyz_np_raw = cp.asnumpy(xyz_cp)
     corr_np_raw = cp.asnumpy(corr_cp)
     del xyz_cp, corr_cp
     gc.collect()
 
-    # <<< INÍCIO DO LOOP DE OTIMIZAÇÃO DE PARÂMETROS >>>
-    # =================================================================
     print("\n======== INICIANDO LOOP DE OTIMIZAÇÃO DE PARÂMETROS DE FILTRAGEM ========")
 
-    # 1. DEFINIR ESPAÇO DE BUSCA PARA OS PARÂMETROS QUE VOCÊ QUER TESTAR
-    # Sinta-se à vontade para alterar estes valores
     search_space = {
         'thresholds_corr': [0.80, 0.85, 0.90, 0.95],
         'min_neighbors_list': [10, 15, 20, 25],
-        'radius_list': [10.0] # Raio de busca fixo para simplificar, mas pode ser uma lista também
+        'radius_list': [8.0, 10.0, 12.0]
     }
 
-    # Variáveis para guardar o melhor resultado encontrado
     best_score = -1
     best_params = {}
     best_point_cloud = {}
 
-    # 2. IMPLEMENTAR ESTRATÉGIA DE BUSCA (GRID SEARCH)
     for t_corr in search_space['thresholds_corr']:
         for m_neigh in search_space['min_neighbors_list']:
             for r_busca in search_space['radius_list']:
@@ -118,7 +105,6 @@ def main():
                 params_key = f"t_corr={t_corr}, m_neigh={m_neigh}, r_busca={r_busca}"
                 print(f"\n--- Testando: {params_key} ---")
                 
-                # Etapa 1: Aplicar o filtro de limiar de correlação
                 filter_mask_corr = corr_np_raw > t_corr
                 xyz_after_corr = xyz_np_raw[filter_mask_corr]
                 corr_after_corr = corr_np_raw[filter_mask_corr]
@@ -126,22 +112,16 @@ def main():
                 if xyz_after_corr.shape[0] < m_neigh:
                     print(f"  Pontos insuficientes ({xyz_after_corr.shape[0]}) após filtro de correlação. Pulando.")
                     continue
-
-                # Etapa 2: Aplicar o filtro espacial de outliers
-                xyz_to_filter_cp = cp.asarray(xyz_after_corr)
-                corr_to_filter_cp = cp.asarray(corr_after_corr)
                 
                 final_xyz_cp, final_corr_cp = Zscan.filter_sparse_points(
-                    xyz_gpu=xyz_to_filter_cp, corr_gpu=corr_to_filter_cp,
+                    xyz=xyz_after_corr, corr=corr_after_corr,
                     min_neighbors=m_neigh, radius=r_busca
                 )
                 
-                # 3. CALCULAR A MÉTRICA DE QUALIDADE
                 num_final_points = final_xyz_cp.shape[0]
                 
-                if num_final_points > 1: # Precisa de mais de 1 ponto para ter média
+                if num_final_points > 1: 
                     avg_corr_final = float(cp.mean(final_corr_cp))
-                    # Nossa métrica: número de pontos multiplicado pela correlação média
                     current_score = num_final_points * avg_corr_final
                 else:
                     avg_corr_final = 0
@@ -149,26 +129,21 @@ def main():
                 
                 print(f"  Resultado: {num_final_points} pontos finais | Média Corr: {avg_corr_final:.4f} | Pontuação: {current_score:.2f}")
 
-                # Etapa 4: Verificar se o resultado atual é o melhor encontrado
                 if current_score > best_score:
                     print(f"  >>> NOVO MELHOR RESULTADO ENCONTRADO! <<<")
                     best_score = current_score
                     best_params = {'threshold_corr': t_corr, 'min_neighbors': m_neigh, 'radius': r_busca}
-                    # Guarda a melhor nuvem de pontos (já na CPU)
                     best_point_cloud = {'xyz': cp.asnumpy(final_xyz_cp), 'corr': cp.asnumpy(final_corr_cp)}
 
-                del final_xyz_cp, final_corr_cp, xyz_to_filter_cp, corr_to_filter_cp
+                del final_xyz_cp, final_corr_cp
                 gc.collect()
 
-    # <<< FIM DO LOOP DE OTIMIZAÇÃO >>>
-    # =================================================================
 
     print("\n\n======== OTIMIZAÇÃO CONCLUÍDA ========")
     if best_score > -1:
         print(f"Melhores parâmetros encontrados: {best_params}")
         print(f"Melhor pontuação de qualidade: {best_score:.2f}")
         
-        # Salva e visualiza a MELHOR nuvem de pontos encontrada pelo loop
         final_filename = os.path.join(output_path, f'best_optimized_cloud_score{best_score:.0f}.csv')
         save_point_cloud(final_filename, best_point_cloud['xyz'], best_point_cloud['corr'])
         

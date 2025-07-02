@@ -3,10 +3,10 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import yaml
-import os
 import matplotlib.pyplot as plt
 import cv2
 from scipy.spatial import cKDTree
+from typing import Tuple
 
 class PyTorchStereoCorrel(nn.Module):
     def __init__(self, yaml_file):
@@ -15,53 +15,52 @@ class PyTorchStereoCorrel(nn.Module):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         print(f"PyTorch a ser executado no dispositivo: {self.device}")
 
-        self.left_images = torch.empty(0)
-        self.right_images = torch.empty(0)
+        self.left_images: torch.Tensor | None = None
+        self.right_images: torch.Tensor | None = None
+        self.grid: torch.Tensor | None = None
+        self.x_vals: torch.Tensor | None = None
+        self.y_vals: torch.Tensor | None = None
+        self.z_vals: torch.Tensor | None = None
 
-        self.camera_params = {
-            'left': {'kk': None, 'kc': None, 'r': None, 't': None},
-            'right': {'kk': None, 'kc': None, 'r': None, 't': None},
-            'stereo': {'R': None, 'T': None}
-        }
-        self.read_yaml_file(yaml_file)
-
-        self.x_vals = torch.empty(0)
-        self.y_vals = torch.empty(0)
-        self.z_vals = torch.empty(0)
-        self.grid = torch.empty(0)
         self.epsilon = 1e-10
+        self.camera_params = self.read_yaml_file(yaml_file)
 
-    def read_yaml_file(self, yaml_file):
+    def read_yaml_file(self, yaml_file: str) -> dict:
+        """Lê os parâmetros de calibração de um arquivo YAML e os retorna."""
         with open(yaml_file) as file:
             params = yaml.safe_load(file)
 
+        camera_params = {
+            'left': {},
+            'right': {},
+            'stereo': {}
+        }
+
         for cam in ['left', 'right']:
-            self.camera_params[cam]['kk'] = torch.tensor(params[f'camera_matrix_{cam}'], dtype=torch.float32, device=self.device)
-            self.camera_params[cam]['kc'] = torch.tensor(params[f'dist_coeffs_{cam}'], dtype=torch.float32, device=self.device)
-            self.camera_params[cam]['r'] = torch.tensor(params[f'rot_matrix_{cam}'], dtype=torch.float32, device=self.device)
-            self.camera_params[cam]['t'] = torch.tensor(params[f't_{cam}'], dtype=torch.float32, device=self.device).view(3, 1)
-        
-        self.camera_params['stereo']['R'] = torch.tensor(params['R'], dtype=torch.float32, device=self.device)
-        self.camera_params['stereo']['T'] = torch.tensor(params['T'], dtype=torch.float32, device=self.device).view(3, 1)
+            camera_params[cam]['kk'] = torch.tensor(params[f'camera_matrix_{cam}'], dtype=torch.float32, device=self.device)
+            camera_params[cam]['kc'] = torch.tensor(params[f'dist_coeffs_{cam}'], dtype=torch.float32, device=self.device)
+            camera_params[cam]['r'] = torch.tensor(params[f'rot_matrix_{cam}'], dtype=torch.float32, device=self.device)
+            camera_params[cam]['t'] = torch.tensor(params[f't_{cam}'], dtype=torch.float32, device=self.device).view(3, 1)
+    
+        camera_params['stereo']['R'] = torch.tensor(params['R'], dtype=torch.float32, device=self.device)
+        camera_params['stereo']['T'] = torch.tensor(params['T'], dtype=torch.float32, device=self.device).view(3, 1)
+
+        return camera_params
 
     def convert_images(self, left_imgs_cpu, right_imgs_cpu, apply_clahe=True, undist=True):
-        processed_left_imgs = []
-        processed_right_imgs = []
         clahe = cv2.createCLAHE(clipLimit=5.0, tileGridSize=(11, 11))
 
-        for img_l, img_r in zip(left_imgs_cpu, right_imgs_cpu):
+        def process_image(img, cam_params):
             if apply_clahe:
-                img_l = clahe.apply(img_l)
-                img_r = clahe.apply(img_r)
+                img = clahe.apply(img)
             if undist:
-                k_l_cpu = self.camera_params['left']['kk'].cpu().numpy()
-                kc_l_cpu = self.camera_params['left']['kc'].cpu().numpy()
-                k_r_cpu = self.camera_params['right']['kk'].cpu().numpy()
-                kc_r_cpu = self.camera_params['right']['kc'].cpu().numpy()
-                img_l = cv2.undistort(img_l, k_l_cpu, kc_l_cpu)
-                img_r = cv2.undistort(img_r, k_r_cpu, kc_r_cpu)
-            processed_left_imgs.append(img_l)
-            processed_right_imgs.append(img_r)
+                k = cam_params['kk'].cpu().numpy()
+                kc = cam_params['kc'].cpu().numpy()
+                img = cv2.undistort(img, k, kc)
+            return img
+
+        processed_left_imgs = [process_image(img, self.camera_params['left']) for img in left_imgs_cpu]
+        processed_right_imgs = [process_image(img, self.camera_params['right']) for img in right_imgs_cpu]
 
         self.left_images = torch.from_numpy(np.stack(processed_left_imgs, axis=0)).to(self.device, dtype=torch.float32)
         self.right_images = torch.from_numpy(np.stack(processed_right_imgs, axis=0)).to(self.device, dtype=torch.float32)
@@ -182,20 +181,30 @@ class PyTorchStereoCorrel(nn.Module):
         
         xyz_final = torch.stack([x_coords_final, y_coords_final, z_best_values_overall], dim=1).to(torch.float32)
 
-        return xyz_final, corr_max_overall, corr_map_overall_z, None, None
+        return xyz_final, corr_max_overall, corr_map_overall_z
 
-    def filter_sparse_points(self, xyz_gpu, corr_gpu, min_neighbors=5, radius=10):
+    def filter_sparse_points(self, xyz_gpu: torch.Tensor, corr_gpu: torch.Tensor, min_neighbors: int = 5, radius: float = 10.0) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Filtra pontos 3D esparsos com base na densidade de vizinhos.
+
+        Args:
+            xyz_gpu (torch.Tensor): Tensor com as coordenadas (N, 3) dos pontos.
+            corr_gpu (torch.Tensor): Tensor com os valores de correlação (N,).
+            min_neighbors (int): Número mínimo de vizinhos em um raio para um ponto ser mantido.
+            radius (float): O raio para a busca de vizinhos.
+
+        Returns:
+            Tuple[torch.Tensor, torch.Tensor]: Um par de tensores (xyz, corr) contendo apenas os pontos densos.
+        """
         if xyz_gpu.numel() == 0:
             return xyz_gpu, corr_gpu
         
         xyz_cpu = xyz_gpu.cpu().numpy()
-        corr_cpu = corr_gpu.cpu().numpy()
-
         tree = cKDTree(xyz_cpu)
-        neighbor_counts = np.array([len(neighbors) for neighbors in tree.query_ball_point(xyz_cpu, r=radius)])
+    
+        neighbor_counts = tree.query_ball_point(xyz_cpu, r=radius, return_length=True)
         dense_mask = neighbor_counts >= min_neighbors
 
-        return torch.from_numpy(xyz_cpu[dense_mask]).to(self.device), torch.from_numpy(corr_cpu[dense_mask]).to(self.device)
+        return xyz_gpu[dense_mask], corr_gpu[dense_mask]
 
     def plot_3d_points(self, x, y, z, color=None, title='Plot 3D'):
         def to_numpy(tensor):
