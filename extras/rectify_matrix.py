@@ -1,6 +1,6 @@
 import cv2
 import os
-from extras import debugger
+import debugger
 
 
 def remap_rect_images(left, right, Kl, Dl, Rl, Pl, Kr, Dr, Rr, Pr):
@@ -83,20 +83,29 @@ def save_camera_parameters_to_yaml(file_path, camera_matrix_left, dist_coeffs_le
 
     print(f"Camera parameters saved to {file_path}")
 
+# Draw horizontal lines for visualization
+def draw_rectification_lines(img, color=(0, 255, 0), n_lines=10):
+    img_color = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+    h = img.shape[0]
+    step = h // (n_lines + 1)
+    for i in range(1, n_lines + 1):
+        y = i * step
+        cv2.line(img_color, (0, y), (img.shape[1], y), color, 1)
+    return img_color
 
 def main():
-    path = 'images/SM3-20240815_1'
-    yaml_file = '../cfg/SM3_20240815_bouget.yaml'
+    path = '/home/daniel/Pictures/SM2_disp'
+    yaml_file = '/home/daniel/Pictures/SM2_disp/params.yaml'
     left_images = sorted(os.listdir(os.path.join(path, 'left')))
     right_images = sorted(os.listdir(os.path.join(path, 'right')))
-    alpha = 1  # value of rectify map (0 - used ROI that are similar, 1 - uses all image)
+    alpha = 1 # value of rectify map (0 - used ROI that are similar, 1 - uses all image)
 
     left_image = cv2.imread(os.path.join(path, 'left', left_images[0]), 0)
     right_image = cv2.imread(os.path.join(path, 'right', right_images[0]), 0)
 
     Kl, Dl, Rl, Pl, Kr, Dr, Rr, Pr, R, T = load_camera_params(yaml_file=yaml_file)
     mask_left, mask_right = debugger.mask_images(left_image, right_image, thres=180)
-    debugger.show_stereo_images(left_image, right_image, 'mask')
+    debugger.show_stereo_images_named(left_image, right_image, 'mask')
 
     # left_image = cv2.bitwise_and(left_image, left_image, mask=mask_left)
     # right_image = cv2.bitwise_and(right_image, right_image, mask=mask_right)
@@ -107,6 +116,14 @@ def main():
     rect_l, rect_r = remap_rect_images(left_image, right_image, Kl=Kl, Dl=Dr, Rl=Rr1, Pl=Pr1,
                                        Kr=Kr, Dr=Dr, Rr=Rr2, Pr=Pr2)
 
+
+
+    rect_l_lines = draw_rectification_lines(rect_l)
+    rect_r_lines = draw_rectification_lines(rect_r)
+
+    # Show images with lines
+    debugger.show_stereo_images_named(rect_l_lines, rect_r_lines, name='Rectified images with lines')
+
     rect_yaml_file = yaml_file.split('.yaml')[0] + '_rect_' + str(alpha) + '.yaml'
 
     save_camera_parameters_to_yaml(rect_yaml_file, camera_matrix_left=Kl, camera_matrix_right=Kr,
@@ -114,8 +131,9 @@ def main():
                                    rot_matrix_left=Rr1, rot_matrix_right=Rr2,
                                    proj_matrix_left=Pr1, proj_matrix_right=Pr2, R=R, T=T)
 
-    debugger.show_stereo_images(rect_l, rect_r, name='Rectified images')
+    # debugger.show_stereo_images(rect_l, rect_r, name='Rectified images')
 
 
 if __name__ == '__main__':
     main()
+    cv2.destroyAllWindows()

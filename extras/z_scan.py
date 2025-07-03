@@ -7,7 +7,7 @@ import cupy as cp
 
 import extras.debugger as debugger
 import rectify_matrix
-import project_points
+import main_project
 
 
 def bi_interpolation_gpu(images, uv_points, max_memory_gb=3):
@@ -576,11 +576,11 @@ def correl_zscan(points_3d, yaml_file, images_path, Nimg, win_size=7, output='Co
     t0 = time.time()
     print('Initiate Algorithm with {} images'.format(Nimg))
     # Identify all images from path file
-    left_images = project_points.read_images(os.path.join(images_path, 'left', ),
+    left_images = main_project.read_images(os.path.join(images_path, 'left', ),
                                              sorted(os.listdir(os.path.join(images_path, 'left'))),
                                              n_images=Nimg, visualize=False)
 
-    right_images = project_points.read_images(os.path.join(images_path, 'right', ),
+    right_images = main_project.read_images(os.path.join(images_path, 'right', ),
                                               sorted(os.listdir(os.path.join(images_path, 'right'))),
                                               n_images=Nimg, visualize=False)
 
@@ -592,8 +592,8 @@ def correl_zscan(points_3d, yaml_file, images_path, Nimg, win_size=7, output='Co
     Kl, Dl, Rl, Tl, Kr, Dr, Rr, Tr, R, T = rectify_matrix.load_camera_params(yaml_file=yaml_file)
 
     # Project points on Left and right
-    uv_points_l = project_points.gcs2ccs_gpu(points_3d, Kl, Dl, Rl, Tl)
-    uv_points_r = project_points.gcs2ccs_gpu(points_3d, Kr, Dr, Rr, Tr)
+    uv_points_l = main_project.gcs2ccs_gpu(points_3d, Kl, Dl, Rl, Tl)
+    uv_points_r = main_project.gcs2ccs_gpu(points_3d, Kr, Dr, Rr, Tr)
 
     t3 = time.time()
     print("Project points \n dt: {} s".format(round((t3 - t1), 2)))
@@ -689,8 +689,8 @@ def fringe_zscan(points_3d, yaml_file, image_name, output='fringe_points', DEBUG
     Kl, Dl, Rl, Tl, Kr, Dr, Rr, Tr, R, T = rectify_matrix.load_camera_params(yaml_file=yaml_file)
 
     # Project points on Left and right
-    uv_points_l = project_points.gcs2ccs_gpu(points_3d, Kl, Dl, Rl, Tl)
-    uv_points_r = project_points.gcs2ccs_gpu(points_3d, Kr, Dr, Rr, Tr)
+    uv_points_l = main_project.gcs2ccs_gpu(points_3d, Kl, Dl, Rl, Tl)
+    uv_points_r = main_project.gcs2ccs_gpu(points_3d, Kr, Dr, Rr, Tr)
 
     t3 = time.time()
     print('Project points \n dt: {} s'.format(round((t3 - t1), 2)))
@@ -739,16 +739,16 @@ def main():
     Nimg = 10
     fringe_image_name = '016.csv'
 
-    left_images = project_points.read_images(os.path.join(images_path, 'left', ),
+    left_images = main_project.read_images(os.path.join(images_path, 'left', ),
                                              sorted(os.listdir(os.path.join(images_path, 'left'))),
                                              n_images=Nimg, visualize=False)
 
-    right_images = project_points.read_images(os.path.join(images_path, 'right', ),
+    right_images = main_project.read_images(os.path.join(images_path, 'right', ),
                                               sorted(os.listdir(os.path.join(images_path, 'right'))),
                                               n_images=Nimg, visualize=False)
 
     t0 = time.time()
-    points_3d = project_points.points3d_cube(x_lim=(-50, 250), y_lim=(-150, 200), z_lim=(-100, 200),
+    points_3d = main_project.points3d_cube(x_lim=(-50, 250), y_lim=(-150, 200), z_lim=(-100, 200),
                                              xy_step=5, z_step=0.1, visualize=False)  # pontos para SM4
     print('Time for 3d points \n {} dt'.format(round((time.time() - t0), 2)))
 
