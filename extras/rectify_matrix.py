@@ -94,8 +94,8 @@ def draw_rectification_lines(img, color=(0, 255, 0), n_lines=10):
     return img_color
 
 def main():
-    path = '/home/daniel/Pictures/image_logs/SM2/20250522_1_2'
-    yaml_file = '/home/daniel/Pictures/image_logs/SM2/20250522_1_2/20250522_dist4.yaml'
+    path = '/home/daniel/Pictures/SM2_disp'
+    yaml_file = '/home/daniel/Pictures/SM2_disp/params.yaml'
     left_images = sorted(os.listdir(os.path.join(path, 'left')))
     right_images = sorted(os.listdir(os.path.join(path, 'right')))
     alpha = 1 # value of rectify map (0 - used ROI that are similar, 1 - uses all image)
