@@ -35,9 +35,9 @@ def save_point_cloud(filename, xyz, corr=None, delimiter=','):
 
 def main():
     # --- Configurações Iniciais ---
-    yaml_file = 'cfg/SM3_20250509.yaml'
+    yaml_file = 'cfg/SM4.yaml'
     # images_path = '/home/daniel/Insync/daniel.regner@labmetro.ufsc.br/Google Drive - Shared drives/VORIS - Media/Experimentos/SM3 - Padrão aleatório/2025 IMEKO - Imagens/20250513_1505_step10_plano_d2'
-    images_path = '/home/daniel/Insync/daniel.regner@labmetro.ufsc.br/Google Drive - Shared drives/VORIS - Media/Experimentos/SM3 - Padrão aleatório/2025 IMEKO - Imagens/20250513_1505_step10_calota_d2'
+    images_path = 'correl/calota'
 
     
     # Output path
@@ -57,17 +57,17 @@ def main():
 
 
     n_imgs_v = [5]
-    kernel_size = [3]
+    kernel_size = [1]
 
     for n_img in n_imgs_v:
         for kernel in kernel_size:
             print('======== Number of images: {}'.format(n_img))
             print('======== Kernel size: {}'.format(kernel))
 
-            x_lim = (-100, 500) 
-            y_lim = (-200, 500)
-            z_lim = (-500, 500)
-            dxyz = (2.0, 10.0)
+            x_lim = (0, 4) 
+            y_lim = (0, 4)
+            z_lim = (-2, 2)
+            dxyz = (2.0, 2.0)
             # --- Execução Única da Etapa Cara (Correlação) ---
             t0 = time.time()
             print(f"\n======== Executando a Análise Principal (n_img={n_img}, kernel={kernel}) ========")
@@ -78,7 +78,7 @@ def main():
             right_imgs_cpu = Zscan.read_images(path=os.path.join(images_path,'right'), images_list=right_imgs_list, n_imgs=n_img)
             
             print("  Convertendo imagens")
-            Zscan.convert_images(left_imgs_cpu=left_imgs_cpu, right_imgs_cpu=right_imgs_cpu, apply_clahe=True, undist=True)
+            Zscan.convert_images(left_imgs_cpu=left_imgs_cpu, right_imgs_cpu=right_imgs_cpu, apply_clahe=False, undist=True)
             del left_imgs_cpu, right_imgs_cpu
             gc.collect()
 

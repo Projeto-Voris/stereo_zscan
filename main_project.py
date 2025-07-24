@@ -60,7 +60,7 @@ def main():
     # Paths for yaml file and images
     yaml_file = 'cfg/SM4.yaml'
     # images_path = '/home/daniel/Insync/daniel.regner@labmetro.ufsc.br/Google Drive - Shared drives/VORIS - Media/Experimentos/SM3 - Padrão aleatório/2025 IMEKO - Imagens/20250513_1505_step10_plano_d2'
-    images_path = '/home/daniel/Pictures/correl'
+    images_path = 'fringe/calota/debug_images'
 
     left_imgs_list = sorted(os.listdir(os.path.join(images_path, 'left')))
 
@@ -68,9 +68,9 @@ def main():
     # images_path = '/home/daniel/Pictures/sm3'
     n_img = 1
     # Determine XYZ bounds #(min, max)
-    x_lim = (-150, 400) 
-    y_lim = (-100, 400)
-    z_lim = (-500, 500)
+    x_lim = (-50, 450) 
+    y_lim = (-100, 300)
+    z_lim = (-0, 10)
     dxyz = (25, 10) #xy step, z step
 
     Zscan = InverseTriangulation(yaml_file=yaml_file)

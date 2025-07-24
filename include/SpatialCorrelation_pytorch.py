@@ -48,7 +48,7 @@ class PyTorchStereoCorrel(nn.Module):
         return camera_params
 
     def convert_images(self, left_imgs_cpu, right_imgs_cpu, apply_clahe=True, undist=True):
-        clahe = cv2.createCLAHE(clipLimit=5.0, tileGridSize=(11, 11))
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(1, 1))
 
         def process_image(img, cam_params):
             if apply_clahe:
@@ -73,12 +73,15 @@ class PyTorchStereoCorrel(nn.Module):
         X, Y, Z = torch.meshgrid(self.x_vals, self.y_vals, self.z_vals, indexing='ij')
         self.grid = torch.stack((X, Y, Z), axis=-1)
 
-    def transform_gcs2ccs(self, points_3d, cam_name):
+    def transform_gcs2ccs(self, points_3d, cam_name, image_shape=None):
         k, r, t = self.camera_params[cam_name]['kk'], self.camera_params[cam_name]['r'], self.camera_params[cam_name]['t']
         
         num_points = points_3d.shape[0]
         if num_points == 0:
-            return torch.empty((0, 2), device=self.device)
+            if image_shape is not None:
+                return torch.empty((0, 2), device=self.device), torch.empty((0,), dtype=torch.bool, device=self.device)
+            else:
+                return torch.empty((0, 2), device=self.device)
 
         ones = torch.ones((num_points, 1), device=self.device, dtype=points_3d.dtype)
         xyz_gcs_1 = torch.cat([points_3d, ones], dim=1)
@@ -97,7 +100,17 @@ class PyTorchStereoCorrel(nn.Module):
             v = k[1, 1] * yn + k[1, 2]
             
             uv_points[valid_mask] = torch.stack([u, v], dim=1)
-        return uv_points
+
+        if image_shape is not None:
+            H, W = image_shape
+            # Mask for points inside image boundaries
+            inside_mask = (
+                (uv_points[:, 0] >= 0) & (uv_points[:, 0] < W) &
+                (uv_points[:, 1] >= 0) & (uv_points[:, 1] < H)
+            )
+            return uv_points, inside_mask
+        else:
+            return uv_points
 
     def interpolate_images(self, images, uv_points):
         if uv_points.numel() == 0:
@@ -115,6 +128,12 @@ class PyTorchStereoCorrel(nn.Module):
         interpolated = F.grid_sample(images_batch, grid, mode='bilinear', padding_mode='border', align_corners=True)
         return interpolated.view(T, N).T
 
+    def phase_map_difference(self, L_patches, R_patches):
+        #Compute absolute difference between left and right patches
+
+        return torch.abs(L_patches - R_patches)[:,0]#, dim=1, keepdim=True)  # Keep the channel dimension for consistency
+
+
     def zncc_correlation(self, L_patches, R_patches):
         L_mean = torch.mean(L_patches, dim=1, keepdim=True)
         R_mean = torch.mean(R_patches, dim=1, keepdim=True)
@@ -128,7 +147,7 @@ class PyTorchStereoCorrel(nn.Module):
         
         return numerator / (denominator + self.epsilon)
 
-    def process_segmented_z(self, Kx, Ky, stride=1, Nz_block_voxels=40):
+    def process_segmented_z(self, Kx, Ky, stride=1, Nz_block_voxels=40, method='correl'):
         Nx, Ny, Nz_total = self.grid.shape[:3]
         T = self.left_images.shape[0]
         
@@ -147,15 +166,15 @@ class PyTorchStereoCorrel(nn.Module):
 
         for z0_idx in range(0, Nz_total, Nz_block_voxels):
             z1_idx = min(z0_idx + Nz_block_voxels, Nz_total)
-            print(f"[Z-SEGMENT] Processando Z-slice: índices {z0_idx} a {z1_idx-1}")
+            # print(f"[Z-SEGMENT] Processando Z-slice: índices {z0_idx} a {z1_idx-1}")
             
             grid_slice = self.grid[:, :, z0_idx:z1_idx, :].to(torch.float32)
             current_Nz_in_slice = grid_slice.shape[2]
 
             grid_flat_xy = grid_slice.permute(2,0,1,3).reshape(current_Nz_in_slice, Nx*Ny, 3)
             
-            uv_left = self.transform_gcs2ccs(grid_flat_xy.reshape(-1, 3), 'left')
-            uv_right = self.transform_gcs2ccs(grid_flat_xy.reshape(-1, 3), 'right')
+            uv_left = self.transform_gcs2ccs(grid_flat_xy.reshape(-1, 3), 'left', image_shape=None)
+            uv_right = self.transform_gcs2ccs(grid_flat_xy.reshape(-1, 3), 'right', image_shape=None)
 
             interp_L = self.interpolate_images(self.left_images, uv_left)
             interp_R = self.interpolate_images(self.right_images, uv_right)
@@ -165,24 +184,59 @@ class PyTorchStereoCorrel(nn.Module):
 
             L_unfold = F.unfold(interp_L.permute(1,0,2,3).reshape(current_Nz_in_slice, T, Nx, Ny), kernel_size=(Kx, Ky), stride=(stride, stride))
             R_unfold = F.unfold(interp_R.permute(1,0,2,3).reshape(current_Nz_in_slice, T, Nx, Ny), kernel_size=(Kx, Ky), stride=(stride, stride))
-            
+            del uv_left, uv_right
+
             L_patches = L_unfold.permute(2, 1, 0).reshape(Nc_for_xy_plane, -1, current_Nz_in_slice)
             R_patches = R_unfold.permute(2, 1, 0).reshape(Nc_for_xy_plane, -1, current_Nz_in_slice)
-            
+
+            del interp_L, interp_R, L_unfold, R_unfold
+            torch.cuda.empty_cache()
+
+
             for z_local_idx in range(current_Nz_in_slice):
-                corr_slice = self.zncc_correlation(L_patches[:,:,z_local_idx], R_patches[:,:,z_local_idx])
+                if method == 'fringe':
+                    corr_slice = self.phase_map_difference(L_patches[:,:,z_local_idx], R_patches[:,:,z_local_idx])
+                else:
+                    corr_slice = self.zncc_correlation(L_patches[:,:,z_local_idx], R_patches[:,:,z_local_idx])
+
                 corr_map_overall_z[:, z0_idx + z_local_idx] = corr_slice
 
-        corr_max_overall, z_best_indices_overall = torch.max(corr_map_overall_z, dim=1)
-        z_best_values_overall = self.z_vals[z_best_indices_overall]
+        if method == 'fringe':
+            corr_overall, z_best_indices_overall = torch.min(corr_map_overall_z, dim=1)
+            z_best_values_overall = self.z_vals[z_best_indices_overall]
+        else:
+            corr_overall, z_best_indices_overall = torch.max(corr_map_overall_z, dim=1)
+            z_best_values_overall = self.z_vals[z_best_indices_overall]
+        
 
         x_coords_final = self.x_vals[IX_centers]
         y_coords_final = self.y_vals[IY_centers]
         
         xyz_final = torch.stack([x_coords_final, y_coords_final, z_best_values_overall], dim=1).to(torch.float32)
 
-        return xyz_final, corr_max_overall, corr_map_overall_z
+        # Project final points to both image planes and check bounds
 
+        return xyz_final, corr_overall, z_best_indices_overall
+
+    def mask_points(self, xyz_gpu: torch.Tensor, corr_gpu: torch.Tensor, bounds, method='correl') -> Tuple[torch.Tensor, torch.Tensor]:
+
+        uv_left_final, uv_left_final_mask = self.transform_gcs2ccs(xyz_gpu, 'left', image_shape=self.left_images.shape[1:])
+        uv_right_final, uv_right_final_mask = self.transform_gcs2ccs(xyz_gpu, 'right', image_shape=self.right_images.shape[1:])
+        L_interp, R_interp = self.interpolate_images(self.left_images, uv_left_final), self.interpolate_images(self.right_images, uv_right_final)
+
+        if method == 'fringe':
+            std_mask = (L_interp[:,1]> bounds) & (R_interp[:,1] > bounds)
+        else:
+            L_std, R_std = L_interp.std(dim=1), R_interp.std(dim=1)
+            std_mask = (bounds < L_std) & (bounds < R_std)
+
+        combined_mask = uv_left_final_mask & uv_right_final_mask & std_mask
+        xyz_masked = xyz_gpu[combined_mask]
+        corr_masked = corr_gpu[combined_mask]
+
+
+        return xyz_masked, corr_masked
+    
     def filter_sparse_points(self, xyz_gpu: torch.Tensor, corr_gpu: torch.Tensor, min_neighbors: int = 5, radius: float = 10.0) -> Tuple[torch.Tensor, torch.Tensor]:
         """Filtra pontos 3D esparsos com base na densidade de vizinhos.
 
