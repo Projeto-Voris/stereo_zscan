@@ -61,7 +61,9 @@ def run_grid_diagnostics(scanner: PyTorchStereoCorrel, limits: dict, steps: dict
 def main():
     """Função principal para executar o pipeline de correlação estéreo."""
     
-    YAML_FILE = 'cfg/SM4.yaml'
+    YAML_FILE = 'cfg/SM3_20250509.yaml' # Yaml file with camera parameters
+    YAML_FILE = 'cfg/SM4.yaml' # Yaml file with camera parameters
+
 
     objects = ['calota']#, 'esfera']
 
@@ -69,36 +71,38 @@ def main():
     distances =[800]
     offset = 800
     dz = 400
-    plot = True
-    debug = False
+    plot = True #plot 3D points of two iterations
+    debug = False #plot debug images
     method = [ 'correl', 'spatial']  # 'correl', 'spatial', 'fringe'
     # method = ['fringe']  # 'correl', 'spatial', 'fringe',
 
-    GRID_STEPS_1 = {'xy': 1.0, 'z': 2}
-    GRID_STEPS_2 = {'xy': 1, 'z': 0.1}
+    GRID_STEPS_1 = {'xy': 2.0, 'z': 2} # first steps of 3d patch
+    GRID_STEPS_2 = {'xy': 1, 'z': 0.1} # second steps of 3d patch
+    
     Zscan = PyTorchStereoCorrel(yaml_file=YAML_FILE)
-    run_grid_diagnostics(Zscan, {'x': (0, 500), 'y': (0, 400), 'z': (-200,800)}, GRID_STEPS_1)
-    run_grid_diagnostics(Zscan, {'x': (0, 500), 'y': (0, 400), 'z': (-200,800)}, GRID_STEPS_2)
+    run_grid_diagnostics(Zscan, {'x': (0, 500), 'y': (0, 400), 'z': (-100,100)}, GRID_STEPS_1)
+    run_grid_diagnostics(Zscan, {'x': (0, 500), 'y': (0, 400), 'z': (-100,100)}, GRID_STEPS_2)
 
     for method in method:
         for obj in objects:
             for dist in distances:
                 print('=' * 50)
                 print(f"\nIniciando processamento para {obj} a {dist} mm usando o método {method}...")
-                IMAGES_PATH = Path('{}/{}'.format(method, obj, dist))
+                # IMAGES_PATH = Path('20250513_1505_step10_calota_d2')
+                IMAGES_PATH = Path('{}/{}'.format(method, obj))
                 if method == 'spatial':
                     N_IMGS_OPTIONS = [5]
                     KERNEL_SIZES = [3]
-                    FILTER_THRESHOLD = 0.8
-                    SPATIAL_FILTER_RADIUS = 10.0
-                    SPATIAL_FILTER_MIN_NEIGHBORS = 10
-                    MASK_BOUNDS = 10 # Limites do desvio padrão dos pontos interpolados nas T imagens
+                    FILTER_THRESHOLD = 0.6
+                    SPATIAL_FILTER_RADIUS =10.0
+                    SPATIAL_FILTER_MIN_NEIGHBORS = 5
+                    MASK_BOUNDS = 20 # Limites do desvio padrão dos pontos interpolados nas T imagens
                 if method == 'correl':
                     N_IMGS_OPTIONS = [15]
                     KERNEL_SIZES = [1]
                     FILTER_THRESHOLD = 0.8
-                    SPATIAL_FILTER_RADIUS = 10.0
-                    SPATIAL_FILTER_MIN_NEIGHBORS = 10
+                    SPATIAL_FILTER_RADIUS = 12.0
+                    SPATIAL_FILTER_MIN_NEIGHBORS = 5
                     MASK_BOUNDS = 20 # Limites do desvio padrão dos pontos interpolados nas T imagens
 
                 if method == 'fringe':
@@ -175,7 +179,7 @@ def main():
                         if method == 'fringe':
                             Zscan.convert_images(left_imgs_cpu, right_imgs_cpu, apply_clahe=False, undist=True)
                         else:
-                            Zscan.convert_images(left_imgs_cpu, right_imgs_cpu, apply_clahe=False, undist=True)
+                            Zscan.convert_images(left_imgs_cpu, right_imgs_cpu, apply_clahe=True, undist=True)
                         del left_imgs_cpu, right_imgs_cpu
                             
 
@@ -187,6 +191,7 @@ def main():
                                     xy_step=GRID_STEPS_1['xy'], z_step=GRID_STEPS_1['z'])
                         
                         xyz_gpu, corr_gpu, _ = Zscan.process_segmented_z(Kx=kernel, Ky=kernel, stride=1, Nz_block_voxels=30, method=method)
+
                         if plot and debug:
                             Zscan.plot_3d_points(x=xyz_gpu[:,0].cpu().numpy(),
                                                     y=xyz_gpu[:,1].cpu().numpy(),
@@ -194,7 +199,6 @@ def main():
                                                     color=corr_gpu.cpu().numpy(),
                                                     title=f'Antes de filtrar {method} - Pontos 3D: {dist} mm {n_img} imgs {kernel}x{kernel}')
                             
-                        xyz_gpu, corr_gpu = Zscan.mask_points(xyz_gpu,corr_gpu, bounds=MASK_BOUNDS, method=method)
 
                         t_correlation_done = time.time()
                         print(f"Correlação concluída em {t_correlation_done - t_preprocessing_done:.2f} s")
@@ -213,6 +217,8 @@ def main():
 
                         xyz_filtered_gpu = xyz_gpu[filter_mask]
                         corr_filtered_gpu = corr_gpu[filter_mask]
+                        xyz_filtered_gpu, corr_filtered_gpu = Zscan.mask_points(xyz_filtered_gpu, corr_filtered_gpu, bounds=MASK_BOUNDS, method=method)
+
                         print(f"Pontos com correlação > {FILTER_THRESHOLD}: {xyz_filtered_gpu.shape[0]}")
                         final_xyz_gpu, final_corr_gpu = Zscan.filter_sparse_points(
                                 xyz_gpu=xyz_filtered_gpu, corr_gpu=corr_filtered_gpu,

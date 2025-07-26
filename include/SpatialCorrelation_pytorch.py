@@ -37,13 +37,13 @@ class PyTorchStereoCorrel(nn.Module):
         }
 
         for cam in ['left', 'right']:
-            camera_params[cam]['kk'] = torch.tensor(params[f'camera_matrix_{cam}'], dtype=torch.float32, device=self.device)
-            camera_params[cam]['kc'] = torch.tensor(params[f'dist_coeffs_{cam}'], dtype=torch.float32, device=self.device)
-            camera_params[cam]['r'] = torch.tensor(params[f'rot_matrix_{cam}'], dtype=torch.float32, device=self.device)
-            camera_params[cam]['t'] = torch.tensor(params[f't_{cam}'], dtype=torch.float32, device=self.device).view(3, 1)
+            camera_params[cam]['kk'] = torch.tensor(params[f'camera_matrix_{cam}'], dtype=torch.double, device=self.device)
+            camera_params[cam]['kc'] = torch.tensor(params[f'dist_coeffs_{cam}'], dtype=torch.double, device=self.device)
+            camera_params[cam]['r'] = torch.tensor(params[f'rot_matrix_{cam}'], dtype=torch.double, device=self.device)
+            camera_params[cam]['t'] = torch.tensor(params[f't_{cam}'], dtype=torch.double, device=self.device).view(3, 1)
     
-        camera_params['stereo']['R'] = torch.tensor(params['R'], dtype=torch.float32, device=self.device)
-        camera_params['stereo']['T'] = torch.tensor(params['T'], dtype=torch.float32, device=self.device).view(3, 1)
+        camera_params['stereo']['R'] = torch.tensor(params['R'], dtype=torch.double, device=self.device)
+        camera_params['stereo']['T'] = torch.tensor(params['T'], dtype=torch.double, device=self.device).view(3, 1)
 
         return camera_params
 
@@ -62,8 +62,8 @@ class PyTorchStereoCorrel(nn.Module):
         processed_left_imgs = [process_image(img, self.camera_params['left']) for img in left_imgs_cpu]
         processed_right_imgs = [process_image(img, self.camera_params['right']) for img in right_imgs_cpu]
 
-        self.left_images = torch.from_numpy(np.stack(processed_left_imgs, axis=0)).to(self.device, dtype=torch.float32)
-        self.right_images = torch.from_numpy(np.stack(processed_right_imgs, axis=0)).to(self.device, dtype=torch.float32)
+        self.left_images = torch.from_numpy(np.stack(processed_left_imgs, axis=0)).to(self.device, dtype=torch.double)
+        self.right_images = torch.from_numpy(np.stack(processed_right_imgs, axis=0)).to(self.device, dtype=torch.double)
 
     def points3d(self, x_lim, y_lim, z_lim, xy_step, z_step):
         self.x_vals = torch.arange(x_lim[0], x_lim[1] + xy_step, xy_step, dtype=torch.float16, device=self.device)
@@ -85,21 +85,22 @@ class PyTorchStereoCorrel(nn.Module):
 
         ones = torch.ones((num_points, 1), device=self.device, dtype=points_3d.dtype)
         xyz_gcs_1 = torch.cat([points_3d, ones], dim=1)
-        rt_matrix = torch.cat([r, t], dim=1)
-        xyz_ccs = torch.matmul(rt_matrix, xyz_gcs_1.T).T
+        rt_matrix = torch.cat([r, t], dim=1) 
+        torch.cat([rt_matrix, torch.tensor([[0, 0, 0, 1]], device=self.device)], dim=0)
+        xyz_ccs = torch.matmul(rt_matrix, xyz_gcs_1.T.to(torch.double)).T
         
         zc = xyz_ccs[:, 2]
         valid_mask = zc > self.epsilon
-        uv_points = torch.full((num_points, 2), -1.0, device=self.device, dtype=torch.float32)
+        uv_points = torch.full((num_points, 2), -1.0, device=self.device, dtype=torch.double)
         
         if torch.any(valid_mask):
             xn = xyz_ccs[valid_mask, 0] / zc[valid_mask]
             yn = xyz_ccs[valid_mask, 1] / zc[valid_mask]
+
+            xyz_ccs = torch.matmul(k, torch.stack([xn, yn, torch.ones_like(xn)], dim=0))
             
-            u = k[0, 0] * xn + k[0, 2]
-            v = k[1, 1] * yn + k[1, 2]
-            
-            uv_points[valid_mask] = torch.stack([u, v], dim=1)
+            uv_points[valid_mask] = xyz_ccs[:2, :].T
+           
 
         if image_shape is not None:
             H, W = image_shape
@@ -125,7 +126,7 @@ class PyTorchStereoCorrel(nn.Module):
         grid = torch.stack([u_norm, v_norm], dim=1).view(1, N, 1, 2)
         images_batch = images.unsqueeze(0)
 
-        interpolated = F.grid_sample(images_batch, grid, mode='bilinear', padding_mode='border', align_corners=True)
+        interpolated = F.grid_sample(images_batch, grid, mode='bilinear', padding_mode='zeros', align_corners=True)
         return interpolated.view(T, N).T
 
     def phase_map_difference(self, L_patches, R_patches):
@@ -143,9 +144,9 @@ class PyTorchStereoCorrel(nn.Module):
         numerator = torch.sum(L_centered * R_centered, dim=1)
         denom_L = torch.sum(L_centered**2, dim=1)
         denom_R = torch.sum(R_centered**2, dim=1)
-        denominator = torch.sqrt(denom_L * denom_R)
+        denominator = torch.sqrt(denom_L) * torch.sqrt(denom_R)
         
-        return numerator / (denominator + self.epsilon)
+        return numerator / torch.max(denominator, torch.tensor(1e-10))
 
     def process_segmented_z(self, Kx, Ky, stride=1, Nz_block_voxels=40, method='correl'):
         Nx, Ny, Nz_total = self.grid.shape[:3]
@@ -162,13 +163,13 @@ class PyTorchStereoCorrel(nn.Module):
         IX_centers, IY_centers = IX_centers.ravel(), IY_centers.ravel()
         Nc_for_xy_plane = IX_centers.shape[0]
 
-        corr_map_overall_z = torch.full((Nc_for_xy_plane, Nz_total), -torch.inf, device=self.device, dtype=torch.float32)
+        corr_map_overall_z = torch.full((Nc_for_xy_plane, Nz_total), -torch.inf, device=self.device, dtype=torch.double)
 
         for z0_idx in range(0, Nz_total, Nz_block_voxels):
             z1_idx = min(z0_idx + Nz_block_voxels, Nz_total)
             # print(f"[Z-SEGMENT] Processando Z-slice: índices {z0_idx} a {z1_idx-1}")
             
-            grid_slice = self.grid[:, :, z0_idx:z1_idx, :].to(torch.float32)
+            grid_slice = self.grid[:, :, z0_idx:z1_idx, :].to(torch.double)
             current_Nz_in_slice = grid_slice.shape[2]
 
             grid_flat_xy = grid_slice.permute(2,0,1,3).reshape(current_Nz_in_slice, Nx*Ny, 3)
@@ -212,7 +213,7 @@ class PyTorchStereoCorrel(nn.Module):
         x_coords_final = self.x_vals[IX_centers]
         y_coords_final = self.y_vals[IY_centers]
         
-        xyz_final = torch.stack([x_coords_final, y_coords_final, z_best_values_overall], dim=1).to(torch.float32)
+        xyz_final = torch.stack([x_coords_final, y_coords_final, z_best_values_overall], dim=1).to(torch.double)
 
         # Project final points to both image planes and check bounds
 
