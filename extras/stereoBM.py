@@ -3,6 +3,8 @@ import numpy as np
 import sys
 import os
 import yaml
+import cupy as cp
+import gc
 
 class StereoOptimizerBase:
     def __init__(self, yaml_file, num_disparities_range=(16, 254, 16), block_size_range=(3, 31, 2)):
@@ -104,8 +106,10 @@ class StereoSGBMOptimizer(StereoOptimizerBase):
         cv2.createTrackbar('speckleWindowSize', window_name, 0, 200, nothing)
         cv2.createTrackbar('speckleRange', window_name, 2, 32, nothing)
         cv2.createTrackbar('disp12MaxDiff', window_name, 1, 25, nothing)
-        cv2.createTrackbar('lambda', window_name, 6000, 10000, nothing)
-        cv2.createTrackbar('sigmaColor', window_name, 1, 3, nothing)
+        cv2.createTrackbar('minDisparity', window_name, 0, 100, nothing)
+        cv2.createTrackbar('mode', window_name, 0, 4, nothing)
+        cv2.createTrackbar('lambda', window_name, 8000, 12000, nothing)
+        cv2.createTrackbar('sigmaColor', window_name, 2, 5, nothing)
 
         info_text = "Press 's' to save params, ESC to exit"
         matcher_left = matcher_right = wls_filter = None
@@ -129,7 +133,8 @@ class StereoSGBMOptimizer(StereoOptimizerBase):
                 'disp12MaxDiff': cv2.getTrackbarPos('disp12MaxDiff', window_name),
                 'P1': cv2.getTrackbarPos('P1', window_name),
                 'P2': cv2.getTrackbarPos('P2', window_name),
-                'mode': cv2.STEREO_SGBM_MODE_SGBM,
+                'mode': cv2.getTrackbarPos('mode', window_name),
+                'minDisparity': cv2.getTrackbarPos('minDisparity', window_name),
                 'numDisparities': num_disp,
                 'blockSize': block_size,
                 'lambda': cv2.getTrackbarPos('lambda', window_name),
@@ -219,8 +224,8 @@ class StereoBMOptimizer(StereoOptimizerBase):
         cv2.createTrackbar('speckleWindowSize', window_name, 0, 200, nothing)
         cv2.createTrackbar('speckleRange', window_name, 2, 32, nothing)
         cv2.createTrackbar('disp12MaxDiff', window_name, 1, 25, nothing)
-        cv2.createTrackbar('lambda', window_name, 8000, 10000, nothing)
-        cv2.createTrackbar('sigmaColor', window_name, 1, 3, nothing)
+        cv2.createTrackbar('lambda', window_name, 8000, 12000, nothing)
+        cv2.createTrackbar('sigmaColor', window_name, 2, 5, nothing)
 
         info_text = "Press 's' to save params, ESC to exit"
         matcher_left = matcher_right = wls_filter = None
@@ -298,23 +303,23 @@ class StereoBMOptimizer(StereoOptimizerBase):
 
 def main():
     path = '/home/daniel/Pictures/SM2_disp'
-    yaml_file = '/home/daniel/Pictures/SM2_disp/params.yaml'
+    yaml_file = '/home/daniel/PycharmProjects/stereo_zscan/cfg/SM2_pb_rect_0.yaml'
     left_images = sorted(os.listdir(os.path.join(path, 'left')))
     right_images = sorted(os.listdir(os.path.join(path, 'right')))
 
-    imgL = cv2.imread(os.path.join(path, 'left', left_images[0]), cv2.IMREAD_GRAYSCALE)
-    imgR = cv2.imread(os.path.join(path, 'right', right_images[0]), cv2.IMREAD_GRAYSCALE)
+    imgL = cv2.imread(os.path.join(path, 'left', left_images[1]), cv2.IMREAD_GRAYSCALE)
+    imgR = cv2.imread(os.path.join(path, 'right', right_images[1]), cv2.IMREAD_GRAYSCALE)
 
     if imgL is None or imgR is None:
         print("Error: Could not load input images.")
         sys.exit(1)
 
-    # optimizer_SGBM = StereoSGBMOptimizer(yaml_file=yaml_file)
-    # imgL_rect, imgR_rect, _ = optimizer_SGBM.rectify_images(imgL=imgL, imgR=imgR)
-    # optimizer_SGBM.show_trackbar_optimization(imgL=imgL_rect, imgR=imgR_rect)
-    optimizer_BM = StereoBMOptimizer(yaml_file=yaml_file)
-    imgL_rect, imgR_rect, _ = optimizer_BM.rectify_images(imgL=imgL, imgR=imgR)
-    optimizer_BM.show_trackbar_optimization(imgL_rect, imgR_rect)
+    optimizer_SGBM = StereoSGBMOptimizer(yaml_file=yaml_file)
+    imgL_rect, imgR_rect, _ = optimizer_SGBM.rectify_images(imgL=imgL, imgR=imgR)
+    optimizer_SGBM.show_trackbar_optimization(imgL=imgL_rect, imgR=imgR_rect)
+    # optimizer_BM = StereoBMOptimizer(yaml_file=yaml_file)
+    # imgL_rect, imgR_rect, _ = optimizer_BM.rectify_images(imgL=imgL, imgR=imgR)
+    # optimizer_BM.show_trackbar_optimization(imgL_rect, imgR_rect)
 
 if __name__ == '__main__':
     main()
