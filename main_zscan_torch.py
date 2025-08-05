@@ -61,19 +61,19 @@ def run_grid_diagnostics(scanner: PyTorchStereoCorrel, limits: dict, steps: dict
 def main():
     """Função principal para executar o pipeline de correlação estéreo."""
     
-    YAML_FILE = 'cfg/SM3_20250509.yaml' # Yaml file with camera parameters
     YAML_FILE = 'cfg/SM4.yaml' # Yaml file with camera parameters
+    # YAML_FILE = 'cfg/SM4.yaml' # Yaml file with camera parameters
 
 
-    objects = ['calota']#, 'esfera']
+    objects = [ 'esfera', 'plano']
 
-    # distances = [700, 850, 1000, 1150, 1300, 1450, 1600, 1750, 1900, 2050]
-    distances =[800]
+    distances = [1150, 1300, 1450, 1600, 1750, 1900, 2050]
+    # distances =[1450]
     offset = 800
-    dz = 400
+    dz = 200
     plot = True #plot 3D points of two iterations
     debug = False #plot debug images
-    method = [ 'correl', 'spatial']  # 'correl', 'spatial', 'fringe'
+    method = ['spatial']#,  # 'correl', 'spatial', 'fringe'
     # method = ['fringe']  # 'correl', 'spatial', 'fringe',
 
     GRID_STEPS_1 = {'xy': 2.0, 'z': 2} # first steps of 3d patch
@@ -83,26 +83,28 @@ def main():
     run_grid_diagnostics(Zscan, {'x': (0, 500), 'y': (0, 400), 'z': (-100,100)}, GRID_STEPS_1)
     run_grid_diagnostics(Zscan, {'x': (0, 500), 'y': (0, 400), 'z': (-100,100)}, GRID_STEPS_2)
 
+    black_factor = 1 # 0 to 1
+
     for method in method:
         for obj in objects:
             for dist in distances:
                 print('=' * 50)
                 print(f"\nIniciando processamento para {obj} a {dist} mm usando o método {method}...")
                 # IMAGES_PATH = Path('20250513_1505_step10_calota_d2')
-                IMAGES_PATH = Path('{}/{}'.format(method, obj))
+                IMAGES_PATH = Path('/home/daniel/Insync/daniel.regner@labmetro.ufsc.br/Google Drive - Shared drives/VORIS - Media/Experimentos/Sistemas Ativo - Congresso Metrologia 2025/20250722_2/correl/{}/{}'.format( obj, dist))
                 if method == 'spatial':
                     N_IMGS_OPTIONS = [5]
                     KERNEL_SIZES = [3]
-                    FILTER_THRESHOLD = 0.6
-                    SPATIAL_FILTER_RADIUS =10.0
-                    SPATIAL_FILTER_MIN_NEIGHBORS = 5
+                    FILTER_THRESHOLD = 0.7
+                    FILTER_RADIUS =15.0
+                    FILTER_MIN_NEIGHBORS = 5
                     MASK_BOUNDS = 20 # Limites do desvio padrão dos pontos interpolados nas T imagens
                 if method == 'correl':
                     N_IMGS_OPTIONS = [15]
                     KERNEL_SIZES = [1]
-                    FILTER_THRESHOLD = 0.8
-                    SPATIAL_FILTER_RADIUS = 12.0
-                    SPATIAL_FILTER_MIN_NEIGHBORS = 5
+                    FILTER_THRESHOLD = 0.85
+                    FILTER_RADIUS = 15.0
+                    FILTER_MIN_NEIGHBORS = 5
                     MASK_BOUNDS = 20 # Limites do desvio padrão dos pontos interpolados nas T imagens
 
                 if method == 'fringe':
@@ -110,9 +112,9 @@ def main():
                     KERNEL_SIZES = [1]
                     PIXEL_PER_FRINGE = 64
                     STEPS = 8
-                    FILTER_THRESHOLD = 1
-                    SPATIAL_FILTER_RADIUS = 10.0
-                    SPATIAL_FILTER_MIN_NEIGHBORS = 15
+                    FILTER_THRESHOLD = 0.04
+                    FILTER_RADIUS = 10.0
+                    FILTER_MIN_NEIGHBORS = 15
                     MASK_BOUNDS = 30 # Limites da modulação dos pontos interpolados
                 
                 
@@ -167,7 +169,9 @@ def main():
                     if method != 'fringe':
                         print(f'Carregando {n_img} pares de imagens...')
                         left_imgs_cpu = read_images_from_disk(left_path, left_imgs_list, n_imgs=n_img)
+                        left_imgs_cpu = [cv2.convertScaleAbs(img, alpha=black_factor) for img in left_imgs_cpu]
                         right_imgs_cpu = read_images_from_disk(right_path, right_imgs_list, n_imgs=n_img)
+                        right_imgs_cpu = [cv2.convertScaleAbs(img, alpha=black_factor) for img in right_imgs_cpu]
 
 
                     for kernel in KERNEL_SIZES:
@@ -190,15 +194,14 @@ def main():
                         Zscan.points3d(x_lim=GRID_LIMITS['x'], y_lim=GRID_LIMITS['y'], z_lim=GRID_LIMITS['z'],
                                     xy_step=GRID_STEPS_1['xy'], z_step=GRID_STEPS_1['z'])
                         
-                        xyz_gpu, corr_gpu, _ = Zscan.process_segmented_z(Kx=kernel, Ky=kernel, stride=1, Nz_block_voxels=30, method=method)
+                        xyz_gpu, corr_gpu, _ = Zscan.process_segmented_z(Kx=kernel, Ky=kernel, stride=1, Nz_block_voxels=20, method=method)
 
                         if plot and debug:
-                            Zscan.plot_3d_points(x=xyz_gpu[:,0].cpu().numpy(),
-                                                    y=xyz_gpu[:,1].cpu().numpy(),
-                                                    z=xyz_gpu[:,2].cpu().numpy(),
-                                                    color=corr_gpu.cpu().numpy(),
+                            Zscan.plot_3d_points(x=xyz_gpu[:,0],
+                                                    y=xyz_gpu[:,1],
+                                                    z=xyz_gpu[:,2],
+                                                    color=corr_gpu,
                                                     title=f'Antes de filtrar {method} - Pontos 3D: {dist} mm {n_img} imgs {kernel}x{kernel}')
-                            
 
                         t_correlation_done = time.time()
                         print(f"Correlação concluída em {t_correlation_done - t_preprocessing_done:.2f} s")
@@ -217,18 +220,22 @@ def main():
 
                         xyz_filtered_gpu = xyz_gpu[filter_mask]
                         corr_filtered_gpu = corr_gpu[filter_mask]
-                        xyz_filtered_gpu, corr_filtered_gpu = Zscan.mask_points(xyz_filtered_gpu, corr_filtered_gpu, bounds=MASK_BOUNDS, method=method)
+                        xyz_filtered_gpu, corr_filtered_gpu, interp_filtered = Zscan.mask_points(xyz_filtered_gpu, corr_filtered_gpu, bounds=MASK_BOUNDS, method=method)
 
                         print(f"Pontos com correlação > {FILTER_THRESHOLD}: {xyz_filtered_gpu.shape[0]}")
-                        final_xyz_gpu, final_corr_gpu = Zscan.filter_sparse_points(
-                                xyz_gpu=xyz_filtered_gpu, corr_gpu=corr_filtered_gpu,
-                                min_neighbors=SPATIAL_FILTER_MIN_NEIGHBORS, radius=SPATIAL_FILTER_RADIUS
-                            )
+                        # final_xyz_gpu, final_corr_gpu = Zscan.filter_sparse_points(
+                        #         xyz_gpu=xyz_filtered_gpu, corr_gpu=corr_filtered_gpu,
+                        #         min_neighbors=SPATIAL_FILTER_MIN_NEIGHBORS, radius=SPATIAL_FILTER_RADIUS
+                        #     )
+                        final_xyz_gpu, final_corr_gpu, interp = Zscan.euclidean_filter(xyz_gpu=xyz_filtered_gpu, corr_gpu=corr_filtered_gpu, interp=interp_filtered, 
+                                                                      min_neighbors=FILTER_MIN_NEIGHBORS, radius=FILTER_RADIUS)
+                        # final_xyz_gpu = xyz_filtered_gpu
+                        # final_corr_gpu = corr_filtered_gpu
                         if plot:
-                            Zscan.plot_3d_points(x=final_xyz_gpu[:,0].cpu().numpy(),
-                                                y=final_xyz_gpu[:,1].cpu().numpy(),
-                                                z=final_xyz_gpu[:,2].cpu().numpy(),
-                                                color=final_corr_gpu.cpu().numpy(),
+                            Zscan.plot_3d_points(x=final_xyz_gpu[:,0],
+                                                y=final_xyz_gpu[:,1],
+                                                z=final_xyz_gpu[:,2],
+                                                color=interp,
                                                 title=f'1a {method} - Pontos 3D: {dist} mm {n_img} imgs {kernel}x{kernel}')
                             
                         xlim = torch.min(final_xyz_gpu[:, 0]), torch.max(final_xyz_gpu[:, 0])
@@ -249,25 +256,46 @@ def main():
                             print(f"Nenhum ponto retornado pelo processamento para.")
                             continue
                         
-                        if xyz_filtered_gpu.numel() > 0:
-                            print("\nAplicando filtro espacial de outliers...")
-                            final_xyz_gpu, final_corr_gpu = Zscan.filter_sparse_points(
-                                xyz_gpu=xyz_filtered_gpu, corr_gpu=corr_filtered_gpu,
-                                min_neighbors=SPATIAL_FILTER_MIN_NEIGHBORS, radius=SPATIAL_FILTER_RADIUS
-                            )
-                            print(f"Pontos após o filtro espacial: {final_xyz_gpu.shape[0]}")
-                            
-                            if final_xyz_gpu.numel() > 0:
-                                save_point_cloud(output_path / '{}-{}-correl-{}img-{}kernel.csv'.format(obj, dist, n_img, kernel),
-                                                final_xyz_gpu, final_corr_gpu)
+                        # if xyz_filtered_gpu.numel() > 0:
+                        #     print("\nAplicando filtro espacial de outliers...")
+                        #     final_xyz_gpu, final_corr_gpu = Zscan.filter_sparse_points(
+                        #         xyz_gpu=xyz_filtered_gpu, corr_gpu=corr_filtered_gpu,
+                        #         min_neighbors=SPATIAL_FILTER_MIN_NEIGHBORS, radius=SPATIAL_FILTER_RADIUS
+                        #     )
+                        #     print(f"Pontos após o filtro espacial: {final_xyz_gpu.shape[0]}")
+
+                        print(f"Total de pontos brutos: {xyz_gpu.shape[0]}")
+                        if method == 'fringe':
+                            filter_mask = corr_gpu < FILTER_THRESHOLD
+                        else:
+                            filter_mask = corr_gpu > FILTER_THRESHOLD
+
+                        xyz_filtered_gpu = xyz_gpu[filter_mask]
+                        corr_filtered_gpu = corr_gpu[filter_mask]
+                        xyz_filtered_gpu, corr_filtered_gpu, interp_filtered = Zscan.mask_points(xyz_filtered_gpu, corr_filtered_gpu, bounds=MASK_BOUNDS, method=method)
+
+                        print(f"Pontos com correlação > {FILTER_THRESHOLD}: {xyz_filtered_gpu.shape[0]}")
+                        # final_xyz_gpu, final_corr_gpu = Zscan.filter_sparse_points(
+                        #         xyz_gpu=xyz_filtered_gpu, corr_gpu=corr_filtered_gpu,
+                        #         min_neighbors=SPATIAL_FILTER_MIN_NEIGHBORS, radius=SPATIAL_FILTER_RADIUS
+                        #     )
+                        final_xyz_gpu, final_corr_gpu, interp = Zscan.euclidean_filter(xyz_gpu=xyz_filtered_gpu, corr_gpu=corr_filtered_gpu, interp=interp_filtered, 
+                                                                      min_neighbors=FILTER_MIN_NEIGHBORS, radius=FILTER_RADIUS)
+                        
+                        # final_xyz_gpu = xyz_filtered_gpu
+                        # final_corr_gpu = corr_filtered_gpu
+                        
+                        if final_xyz_gpu.numel() > 0:
+                            save_point_cloud(output_path / '{}-{}-correl-{}img-{}kernel.csv'.format(obj, dist, n_img, kernel),
+                                            final_xyz_gpu, final_corr_gpu)
 
                         t_run_end = time.time()
                         print(f"======== Concluído: em {t_run_end - t_run_start:.2f} s ========")
                         if plot:
-                            Zscan.plot_3d_points(x=final_xyz_gpu[:,0].cpu().numpy(),
-                                                y=final_xyz_gpu[:,1].cpu().numpy(),
-                                                z=final_xyz_gpu[:,2].cpu().numpy(),
-                                                color=final_corr_gpu.cpu().numpy(),
+                            Zscan.plot_3d_points(x=final_xyz_gpu[:,0],
+                                                y=final_xyz_gpu[:,1],
+                                                z=final_xyz_gpu[:,2],
+                                                color=interp,
                                                 title=f'2a  {method} - Pontos 3D: {dist} mm {n_img} imgs {kernel}x{kernel}')
 
                 t_end_total = time.time()

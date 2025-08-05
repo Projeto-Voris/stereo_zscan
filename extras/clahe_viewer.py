@@ -3,8 +3,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 # --- Load images ---
-left_img = cv2.imread("/home/daniel/Pictures/correl/left/L01.png", cv2.IMREAD_GRAYSCALE)
-right_img = cv2.imread("/home/daniel/Pictures/correl/right/R01.png", cv2.IMREAD_GRAYSCALE)
+left_img = cv2.imread("/home/daniel/Insync/daniel.regner@labmetro.ufsc.br/Google Drive - Shared drives/VORIS - Media/Experimentos/Sistemas Ativo - Congresso Metrologia 2025/20250722_2/correl/esfera/1900/left/L01.png", cv2.IMREAD_GRAYSCALE)
+right_img = cv2.imread("/home/daniel/Insync/daniel.regner@labmetro.ufsc.br/Google Drive - Shared drives/VORIS - Media/Experimentos/Sistemas Ativo - Congresso Metrologia 2025/20250722_2/correl/esfera/1900/right/R01.png", cv2.IMREAD_GRAYSCALE)
 
 if left_img is None or right_img is None:
     raise FileNotFoundError("Could not load 'left.png' or 'right.png'")

@@ -94,17 +94,19 @@ def draw_rectification_lines(img, color=(0, 255, 0), n_lines=10):
     return img_color
 
 def main():
-    path = '/home/daniel/Pictures/SM2_disp'
-    yaml_file = '/home/daniel/Pictures/SM2_disp/params.yaml'
+    path = '/home/daniel/Pictures/image_logs/SM2/20250801_resized_612_512'
+    yaml_file = '/home/daniel/Pictures/image_logs/SM2/20250801_resized_612_512/calib.yaml'
     left_images = sorted(os.listdir(os.path.join(path, 'left')))
     right_images = sorted(os.listdir(os.path.join(path, 'right')))
-    alpha = 1 # value of rectify map (0 - used ROI that are similar, 1 - uses all image)
+    alpha = 0 # value of rectify map (0 - used ROI that are similar, 1 - uses all image)
 
     left_image = cv2.imread(os.path.join(path, 'left', left_images[0]), 0)
     right_image = cv2.imread(os.path.join(path, 'right', right_images[0]), 0)
 
     Kl, Dl, Rl, Pl, Kr, Dr, Rr, Pr, R, T = load_camera_params(yaml_file=yaml_file)
+    # R = np.transpose(R)
     mask_left, mask_right = debugger.mask_images(left_image, right_image, thres=180)
+    # R = np.linalg.inv(R)
     debugger.show_stereo_images_named(left_image, right_image, 'mask')
 
     # left_image = cv2.bitwise_and(left_image, left_image, mask=mask_left)

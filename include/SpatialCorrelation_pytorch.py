@@ -66,9 +66,9 @@ class PyTorchStereoCorrel(nn.Module):
         self.right_images = torch.from_numpy(np.stack(processed_right_imgs, axis=0)).to(self.device, dtype=torch.float32)
 
     def points3d(self, x_lim, y_lim, z_lim, xy_step, z_step):
-        self.x_vals = torch.arange(x_lim[0], x_lim[1] + xy_step, xy_step, dtype=torch.float16, device=self.device)
-        self.y_vals = torch.arange(y_lim[0], y_lim[1] + xy_step, xy_step, dtype=torch.float16, device=self.device)
-        self.z_vals = torch.arange(z_lim[0], z_lim[1] + z_step, z_step, dtype=torch.float16, device=self.device)
+        self.x_vals = torch.arange(x_lim[0], x_lim[1] + xy_step, xy_step, dtype=torch.float32, device=self.device)
+        self.y_vals = torch.arange(y_lim[0], y_lim[1] + xy_step, xy_step, dtype=torch.float32, device=self.device)
+        self.z_vals = torch.arange(z_lim[0], z_lim[1] + z_step, z_step, dtype=torch.float32, device=self.device)
         
         X, Y, Z = torch.meshgrid(self.x_vals, self.y_vals, self.z_vals, indexing='ij')
         self.grid = torch.stack((X, Y, Z), axis=-1)
@@ -234,18 +234,21 @@ class PyTorchStereoCorrel(nn.Module):
 
         if method == 'fringe':
             std_mask = (L_interp[:,1]> bounds) & (R_interp[:,1] > bounds)
+            L_masked = L_interp[:, 1]
         else:
             L_std, R_std = L_interp.std(dim=1), R_interp.std(dim=1)
             std_mask = (bounds < L_std) & (bounds < R_std)
+            L_masked = L_std
 
         combined_mask = uv_left_final_mask & uv_right_final_mask & std_mask
         xyz_masked = xyz_gpu[combined_mask]
         corr_masked = corr_gpu[combined_mask]
+        L_masked = L_masked[combined_mask]
 
 
-        return xyz_masked, corr_masked
+        return xyz_masked, corr_masked, L_masked
     
-    def filter_sparse_points(self, xyz_gpu: torch.Tensor, corr_gpu: torch.Tensor, min_neighbors: int = 5, radius: float = 10.0) -> Tuple[torch.Tensor, torch.Tensor]:
+    def filter_sparse_points(self, xyz_gpu: torch.Tensor, corr_gpu: torch.Tensor, min_neighbors: int = 5, radius: float = 10.0) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Filtra pontos 3D esparsos com base na densidade de vizinhos.
 
         Args:
@@ -267,6 +270,42 @@ class PyTorchStereoCorrel(nn.Module):
         dense_mask = neighbor_counts >= min_neighbors
 
         return xyz_gpu[dense_mask], corr_gpu[dense_mask]
+
+    def euclidean_filter(self, xyz_gpu: torch.Tensor, corr_gpu: torch.Tensor, interp: torch.Tensor, min_neighbors: int = 5, radius: float = 10.0, batch_size=1024) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        n = xyz_gpu.shape[0]
+        final_mask = torch.zeros(n, dtype=torch.bool, device=xyz_gpu.device)
+
+        # Itera sobre os pontos em lotes
+        for i in range(0, n, batch_size):
+            i_end = min(i + batch_size, n)
+            
+            # Pega o lote de pontos atual
+            xyz_batch = xyz_gpu[i:i_end]
+
+            # Calcula a matriz de distância APENAS entre o lote atual e TODOS os outros pontos.
+            # Isso ainda pode ser grande, mas é uma melhora significativa.
+            dist_batch = torch.cdist(xyz_batch, xyz_gpu)
+
+            # 1. Aplica o filtro de raio (mask_dist)
+            # As distâncias entre um ponto e ele mesmo são 0, então `dist_batch > 0` já exclui a diagonal do lote
+            # (se o lote for a matriz completa) e garante que o ponto não seja seu próprio vizinho.
+            mask_dist = (dist_batch > 0) & (dist_batch < radius)
+
+            # 2. Conta os vizinhos para cada ponto do lote
+            neighbors_count = mask_dist.sum(dim=1)
+
+            # 3. Cria a máscara para os pontos que têm vizinhos suficientes
+            mask_neighbors = neighbors_count > min_neighbors
+
+            # 4. Atualiza a máscara final
+            final_mask[i:i_end] = mask_neighbors
+
+            # Opcional: Limpa a memória para liberar a GPU
+            del dist_batch, mask_dist, neighbors_count, mask_neighbors
+            torch.cuda.empty_cache()
+
+        # Aplica a máscara final aos tensores originais
+        return xyz_gpu[final_mask], corr_gpu[final_mask], interp[final_mask]
 
     def plot_3d_points(self, x, y, z, color=None, title='Plot 3D'):
         def to_numpy(tensor):
