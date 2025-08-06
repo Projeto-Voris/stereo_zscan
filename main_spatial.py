@@ -5,7 +5,7 @@ import os
 import time
 import gc
 
-from include.SpatialCorrelation_optimization import StereoTemporalSpatialCorrel
+from include.SpatialCorrelation import StereoTemporalSpatialCorrel
 
 
 def save_point_cloud(filename, xyz, corr=None, delimiter=','):
@@ -35,9 +35,9 @@ def save_point_cloud(filename, xyz, corr=None, delimiter=','):
 
 def main():
     # --- Configurações Iniciais ---
-    yaml_file = 'cfg/SM3_20250509.yaml'
+    yaml_file = 'cfg/SM4.yaml'
     # images_path = '/home/daniel/Insync/daniel.regner@labmetro.ufsc.br/Google Drive - Shared drives/VORIS - Media/Experimentos/SM3 - Padrão aleatório/2025 IMEKO - Imagens/20250513_1505_step10_plano_d2'
-    images_path = '/home/daniel/Insync/daniel.regner@labmetro.ufsc.br/Google Drive - Shared drives/VORIS - Media/Experimentos/SM3 - Padrão aleatório/2025 IMEKO - Imagens/20250513_1505_step10_calota_d2'
+    images_path = 'correl/calota'
 
     
     # Output path
@@ -64,10 +64,10 @@ def main():
             print('======== Number of images: {}'.format(n_img))
             print('======== Kernel size: {}'.format(kernel))
 
-            x_lim = (-100, 500) 
-            y_lim = (-200, 500)
-            z_lim = (-500, 500)
-            dxyz = (2.0, 10.0)
+            x_lim = (50, 350) 
+            y_lim = (-100, 300)
+            z_lim = (100, 300)
+            dxyz = (2.0, 1.0)
             # --- Execução Única da Etapa Cara (Correlação) ---
             t0 = time.time()
             print(f"\n======== Executando a Análise Principal (n_img={n_img}, kernel={kernel}) ========")
@@ -78,7 +78,7 @@ def main():
             right_imgs_cpu = Zscan.read_images(path=os.path.join(images_path,'right'), images_list=right_imgs_list, n_imgs=n_img)
             
             print("  Convertendo imagens")
-            Zscan.convert_images(left_imgs_cpu=left_imgs_cpu, right_imgs_cpu=right_imgs_cpu, apply_clahe=True, undist=True)
+            Zscan.convert_images(left_imgs_cpu=left_imgs_cpu, right_imgs_cpu=right_imgs_cpu, apply_clahe=False, undist=True)
             del left_imgs_cpu, right_imgs_cpu
             gc.collect()
 
@@ -91,8 +91,8 @@ def main():
 
             print('------- Primeira correlação: {} s'.format(round(time.time() - t0, 2)))
             # Mover os resultados brutos para a CPU para o loop de otimização
-            xyz_np_raw = cp.asnumpy(xyz_cp[corr_cp > 0.9])
-            corr_np_raw = cp.asnumpy(corr_cp[corr_cp > 0.9])
+            xyz_np_raw = cp.asnumpy(xyz_cp[corr_cp > 0.7])
+            corr_np_raw = cp.asnumpy(corr_cp[corr_cp > 0.7])
             del xyz_cp, corr_cp
             gc.collect()
             # Filtrando pontos
@@ -108,14 +108,14 @@ def main():
 
             t0 = time.time()
             print(f"  Construindo segunda grade 3D (Pontos)...")
-            Zscan.points3d(x_lim=x_lim, y_lim=y_lim, z_lim=z_lim, xy_step=1, z_step=1)
+            Zscan.points3d(x_lim=x_lim, y_lim=y_lim, z_lim=z_lim, xy_step=1, z_step=0.1)
             
             print(f"  Iniciando correlação espaço-temporal")
             xyz_cp, corr_cp, _, _, _ = Zscan.process_segmented_z(Kx=kernel, Ky=kernel, stride=1, Nz_block_voxels=40)
 
             # Mover os resultados brutos para a CPU para o loop de otimização
-            xyz_np_raw = cp.asnumpy(xyz_cp[corr_cp > 0.9])
-            corr_np_raw = cp.asnumpy(corr_cp[corr_cp > 0.9])
+            xyz_np_raw = cp.asnumpy(xyz_cp[corr_cp > 0.6])
+            corr_np_raw = cp.asnumpy(corr_cp[corr_cp > 0.6])
             del xyz_cp, corr_cp
             gc.collect()
             filtered_xyz_cp, final_corr_cp = Zscan.filter_sparse_points(xyz=xyz_np_raw, corr=corr_np_raw,min_neighbors=10, radius=5)
@@ -124,7 +124,7 @@ def main():
             print('------- Segunda correlação: {} s'.format(round(time.time() - t0, 2)))
 
             # filtered_xyz, filtered_corr = Zscan.filter_sparse_points(xyz=xyz, corr=corr, min_neighbors=5, radius=10)
-            # np.savetxt(os.path.join(output_path, 'correl_filtered_imgs{}_kernel{}.txt'.format(n_img, kernel, n_img)), filtered_xyz, delimiter=',')
+            np.savetxt(os.path.join(output_path, 'correl_filtered_imgs{}_kernel{}.txt'.format(n_img, kernel, n_img)), xyz, delimiter=',')
             Zscan.plot_3d_points(xyz[:,0], xyz[:,1], xyz[:,2], color=corr, title='xyz')
    
     # np.save(os.path.join(output_path, 'correl.npy'.format(n_img, kernel)), correl_data)

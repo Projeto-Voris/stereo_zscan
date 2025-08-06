@@ -369,7 +369,11 @@ def plot_points_on_image(image, points, color=(0, 255, 0), radius=5, thickness=1
     - output_image: The image with the plotted points.
     """
     # full_image = np.ones((np.max(points[:, 0]) + 1, np.max(points[:, 1]) + 1, 3), dtype=int)
-    output_image = cv2.cvtColor(np.uint8(image), cv2.COLOR_GRAY2BGR)
+    if len(image.shape) == 2:
+        output_image = cv2.cvtColor(np.uint8(image), cv2.COLOR_GRAY2BGR)
+    else:
+        output_image = image.copy()
+        
     for (u, v) in points.T:
         # Draw a circle for each point on the image
         cv2.circle(output_image, (int(u), int(v)), radius, color, thickness)

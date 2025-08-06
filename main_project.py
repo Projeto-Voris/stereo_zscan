@@ -4,9 +4,10 @@ import os
 import cupy as cp
 import gc
 import matplotlib.pyplot as plt
-
+from pathlib import Path
 from extras.debugger import plot_points_on_image, show_stereo_images_named
-from include.InverseTriangulation import InverseTriangulation
+from include.SpatialCorrelation import StereoTemporalSpatialCorrel as StereoCorrelCupy
+from include.SpatialCorrelation_pytorch import PyTorchStereoCorrel as StereoCorrelTorch
 import extras.project_points as project_points
 
 def calculate_and_plot_uv_differences(uv_points):
@@ -56,60 +57,83 @@ def calculate_and_plot_uv_differences(uv_points):
 
     return avg_diff, std_diff, differences
 
+def read_images(path, images_list, n_imgs):       
+        return [cv2.imread(os.path.join(path, str(img_name)), cv2.IMREAD_GRAYSCALE)
+                    for img_name in images_list[0:n_imgs]]
+
 def main():
     # Paths for yaml file and images
     yaml_file = 'cfg/SM4.yaml'
     # images_path = '/home/daniel/Insync/daniel.regner@labmetro.ufsc.br/Google Drive - Shared drives/VORIS - Media/Experimentos/SM3 - Padrão aleatório/2025 IMEKO - Imagens/20250513_1505_step10_plano_d2'
-    images_path = '/home/daniel/Pictures/correl'
+    images_path = '/home/daniel/Insync/daniel.regner@labmetro.ufsc.br/Google Drive - Shared drives/VORIS - Media/Experimentos/Sistemas Ativo - Congresso Metrologia 2025/20250722_2/correl/calota'
 
     left_imgs_list = sorted(os.listdir(os.path.join(images_path, 'left')))
-
     right_imgs_list = sorted(os.listdir(os.path.join(images_path, 'right')))
     # images_path = '/home/daniel/Pictures/sm3'
     n_img = 1
     # Determine XYZ bounds #(min, max)
-    x_lim = (-150, 400) 
-    y_lim = (-100, 400)
-    z_lim = (-500, 500)
+    x_lim = (-100, 450) 
+    y_lim = (-100, 300)
+    z_lim = (-0, 10)
     dxyz = (25, 10) #xy step, z step
 
-    Zscan = InverseTriangulation(yaml_file=yaml_file)
+    zscan_cp = StereoCorrelCupy(yaml_file=yaml_file)
+    zscan_torch = StereoCorrelTorch(yaml_file=yaml_file)
     # # Identify all images from path file
-    left_imgs = Zscan.read_images(path=os.path.join(images_path,'left'), images_list=left_imgs_list, n_imgs=n_img)
-    right_imgs = Zscan.read_images(path=os.path.join(images_path,'right'), images_list=right_imgs_list, n_imgs=n_img)
-    Zscan.convert_images(left_imgs=left_imgs, right_imgs=right_imgs, apply_clahe=True, undist=True)
+    left_imgs_cpu = read_images(path=os.path.join(images_path,'left'), images_list=left_imgs_list, n_imgs=n_img)
+    right_imgs_cpu = read_images(path=os.path.join(images_path,'right'), images_list=right_imgs_list, n_imgs=n_img)
 
-    points3d = Zscan.points3d(x_lim=x_lim, y_lim=y_lim, z_lim=z_lim, xy_step=dxyz[0], z_step=dxyz[1], visualize=True)
-    print('points3d', points3d.shape)
-    uv_left = Zscan.transform_gcs2ccs(points_3d=points3d, cam_name='left')
-    uv_right = Zscan.transform_gcs2ccs(points_3d=points3d, cam_name='right')
-    print('uv_left', uv_left.shape)
-    print('uv_right', uv_right.shape)
-    output_image_L = plot_points_on_image(image=cp.asnumpy(Zscan.left_images[:, :, 0]), points=uv_left, color=(0, 255, 0),
-                                                   radius=4,
-                                                   thickness=-1)
-    output_image_R = plot_points_on_image(image=cp.asnumpy(Zscan.right_images[:, :, 0]), points=uv_right, color=(0, 255, 0),
-                                                   radius=4,
-                                                   thickness=-1)
+    zscan_cp.convert_images(left_imgs_cpu=left_imgs_cpu, right_imgs_cpu=right_imgs_cpu, apply_clahe=False, undist=True)
+    zscan_torch.convert_images(left_imgs_cpu=left_imgs_cpu, right_imgs_cpu=right_imgs_cpu, apply_clahe=False, undist=True)
 
+
+    zscan_cp.points3d(x_lim=x_lim, y_lim=y_lim, z_lim=z_lim, xy_step=dxyz[0], z_step=dxyz[1])
+    zscan_torch.points3d(x_lim=x_lim, y_lim=y_lim, z_lim=z_lim, xy_step=dxyz[0], z_step=dxyz[1])
+    grid_flat_cp = zscan_cp.grid.reshape(-1,3)
+    uv_left_cp = zscan_cp.transform_gcs2ccs(points_3d=grid_flat_cp, cam_name='left')
+    uv_right_cp = zscan_cp.transform_gcs2ccs(points_3d=grid_flat_cp, cam_name='right')
+
+    print('cp uv_left', uv_left_cp.shape)
+    print('cp uv_right', uv_right_cp.shape)
+
+    grid_flat_torch = zscan_torch.grid.reshape(-1, 3)
+
+    uv_left_torch, uv_l_mask = zscan_torch.transform_gcs2ccs(points_3d=grid_flat_torch, cam_name='left', image_shape=zscan_torch.left_images.shape[1:])
+    uv_right_torch, uv_r_mask = zscan_torch.transform_gcs2ccs(points_3d=grid_flat_torch, cam_name='right', image_shape=zscan_torch.right_images.shape[1:])
+
+    print('torch uv_left', uv_left_torch.shape)
+    print('torch uv_right', uv_right_torch.shape)
+
+    output_image_L = plot_points_on_image(image=left_imgs_cpu[0], points=cp.asnumpy(uv_left_cp), color=(0, 0, 255),
+                                                   radius=3,
+                                                   thickness=-1)
+    output_image_R = plot_points_on_image(image=right_imgs_cpu[0], points=cp.asnumpy(uv_right_cp), color=(0, 255, 0),
+                                                   radius=3,
+                                                   thickness=-1)
+    
+    output_image_L = plot_points_on_image(image=output_image_L, points=uv_left_torch.cpu().numpy().T, color=(255, 0, 0), radius=7, thickness=1)
+    output_image_R = plot_points_on_image(image=output_image_R, points=uv_right_torch.cpu().numpy().T, color=(255, 0, 0), radius=7, thickness=1)
 
     show_stereo_images_named(output_image_L, output_image_R, "Remaped points")
     cv2.waitKey(0)
 
-    mask_left = (uv_left < 0) | (uv_left > left_imgs[0].shape[1])
-    mask_right = (uv_right < 0) | (uv_right > right_imgs[0].shape[1])
-    mask = np.any((mask_left | mask_right), axis=0)
-    idx = np.where(mask)[0]
-    out_pts = points3d[idx.get()]
-    print(out_pts)
-    # Calculate and plot differences for uv_left
-    avg_diff_left, std_diff_left, differences_left = calculate_and_plot_uv_differences(uv_left)
-    print(f"Left UV Points - Average Difference: {avg_diff_left} pixel/mm, Standard Deviation: {std_diff_left}")
+    # Interpolate uv points
 
-    # Calculate and plot differences for uv_right
-    avg_diff_right, std_diff_right, differences_right = calculate_and_plot_uv_differences(uv_right)
-    print(f"Right UV Points - Average Difference: {avg_diff_right} pixel/mm, Standard Deviation: {std_diff_right}")
-    print('wait')
+    inter_L_cp, _ = zscan_cp.bi_interpolation(uv_points=uv_left_cp, images=zscan_cp.left_images)
+    inter_R_cp, _ = zscan_cp.bi_interpolation(uv_points=uv_right_cp, images=zscan_cp.right_images)
+
+    print('inter_L_cp', inter_L_cp.shape)
+    print('inter_R_cp', inter_R_cp.shape) 
+    
+    inter_L_torch = zscan_torch.interpolate_images(uv_points=uv_left_torch, images=zscan_torch.left_images, uv_mask=uv_l_mask)
+    inter_R_torch = zscan_torch.interpolate_images(uv_points=uv_right_torch, images=zscan_torch.right_images, uv_mask=uv_r_mask)
+
+    print('inter_L_torch', inter_L_torch.shape)
+    print('inter_R_torch', inter_R_torch.shape)
+
+    equal = np.allclose(cp.asnumpy(inter_L_cp), inter_L_torch.cpu().numpy(), atol=1e-10)
+    print(f"Are the interpolated images equal? {equal}")
+
 
 
 

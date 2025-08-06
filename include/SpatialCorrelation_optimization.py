@@ -368,7 +368,7 @@ class StereoTemporalSpatialCorrel:
 
         print(f"[INFO] Total kernels to process (Nc_total): {Nc_total}. Batch size (nc_batch_size): {nc_batch_size}")
 
-        for i in range(0, Nc_total, nc_batch_size):
+        for i in range(0, Nc_total, 30):
             batch_start_time = cp.cuda.Event()
             batch_end_time = cp.cuda.Event()
             batch_start_time.record()
@@ -398,15 +398,15 @@ class StereoTemporalSpatialCorrel:
 
             num_total_voxels_in_batch_kernels = current_Nc_in_batch * Kx * Ky * Nz_current_grid
             kernel_voxel_coords_flat = kernel_voxel_coords.reshape(num_total_voxels_in_batch_kernels, 3)
-            del kernel_voxel_coords
+            # del kernel_voxel_coords
 
             uv_left_batch_flat = self.transform_gcs2ccs(kernel_voxel_coords_flat, cam_name='left')
             uv_right_batch_flat = self.transform_gcs2ccs(kernel_voxel_coords_flat, cam_name='right')
-            del kernel_voxel_coords_flat
+            # del kernel_voxel_coords_flat
 
             interp_L_flat, std_L_val_flat = self.bi_interpolation(self.left_images, uv_left_batch_flat)
             interp_R_flat, std_R_val_flat = self.bi_interpolation(self.right_images, uv_right_batch_flat)
-            del uv_left_batch_flat, uv_right_batch_flat
+            #del uv_left_batch_flat, uv_right_batch_flat
 
             interp_L_k = interp_L_flat.reshape(current_Nc_in_batch, Kx, Ky, Nz_current_grid, T)
             interp_R_k = interp_R_flat.reshape(current_Nc_in_batch, Kx, Ky, Nz_current_grid, T)

@@ -70,107 +70,125 @@ def run_grid_diagnostics(scanner: PyTorchStereoCorrel, limits: dict, steps: dict
 def main():
     """Função principal para executar o pipeline de correlação estéreo."""
     
-    YAML_FILE = 'cfg/SM3_20250509.yaml'
-    IMAGES_PATH = Path('20250513_1505_step10_esferas_d2')
-    
-    N_IMGS_OPTIONS = [5]
-    KERNEL_SIZES = [3]
-    
-    GRID_LIMITS = {'x': (0, 400), 'y': (-100, 300), 'z': (-200, 200)}
-    GRID_STEPS = {'xy': 1.0, 'z': 1.0}
-    CORR_THRESHOLD = 0.8
-    SPATIAL_FILTER_RADIUS = 10.0
-    SPATIAL_FILTER_MIN_NEIGHBORS = 15
-    
-    current_timestamp = time.strftime("%Y%m%d_%H%M%S")
-    output_path = Path(f'{current_timestamp}-{IMAGES_PATH.name}-pytorch-correl')
-    output_path.mkdir(parents=True, exist_ok=True)
+    YAML_FILE = 'cfg/SM4.yaml'
 
-    t_start_total = time.time()
-    
-    try:
-        left_path = IMAGES_PATH / 'left'
-        right_path = IMAGES_PATH / 'right'
-        left_imgs_list = sorted([p.name for p in left_path.iterdir()])
-        right_imgs_list = sorted([p.name for p in right_path.iterdir()])
-        if not left_imgs_list or not right_imgs_list:
-            print(f"Erro: Não foram encontradas imagens em {IMAGES_PATH}")
-            return
-    except FileNotFoundError:
-        print(f"Erro: Diretório de imagens não encontrado: {IMAGES_PATH}")
-        return
-        
-    print('Imagens encontradas. Processamento iniciado...')
+    # objects = ['esfera', 'plano']
+    objects = ['plano', 'esfera']
 
-    def read_images_from_disk(path: Path, images_list: list, n_imgs: int) -> list:
-        return [cv2.imread(str(path / img_name), cv2.IMREAD_GRAYSCALE) for img_name in images_list[:n_imgs]]
+    distances = ['700', '850', '1000', '1150', '1300', '1450']#, '1600', '1750', '1900', '2050']
+    # distances = ['1600', '1750', '1900', '2050']
+    offset = 800
+    dz = 250
 
-    for n_img in N_IMGS_OPTIONS:
-        for kernel in KERNEL_SIZES:
-            run_key = f"imgs{n_img}_kernel{kernel}"
-            print(f'\n======== Iniciando: {run_key} ========')
+    for obj in objects:
+        for dist in distances:
             
-            t_run_start = time.time()
-
-            Zscan = PyTorchStereoCorrel(yaml_file=YAML_FILE)
             
-            run_grid_diagnostics(Zscan, GRID_LIMITS, GRID_STEPS)
-
-            print(f"Carregando {n_img} pares de imagens...")
-            left_imgs_cpu = read_images_from_disk(left_path, left_imgs_list, n_img)
-            right_imgs_cpu = read_images_from_disk(right_path, right_imgs_list, n_img)
+            IMAGES_PATH = Path('correl/{}/{}'.format(obj, dist))
+            N_IMGS_OPTIONS = [5]
+            KERNEL_SIZES = [3]
+            GRID_LIMITS = {'x': (0, 500), 'y': (-0, 300), 'z': (int(dist) - offset - dz, int(dist) - offset + dz)}
+            GRID_STEPS = {'xy': 1.0, 'z': 0.1}
+            CORR_THRESHOLD = 0.8
+            SPATIAL_FILTER_RADIUS = 10.0
+            SPATIAL_FILTER_MIN_NEIGHBORS = 15
             
-            print("Convertendo imagens (CLAHE, Undistort)...")
-            Zscan.convert_images(left_imgs_cpu, right_imgs_cpu, apply_clahe=True, undist=True)
-            del left_imgs_cpu, right_imgs_cpu
+            # current_timestamp = time.strftime("%Y%m%d_%H%M%S")
+            # output_path = Path('{}-{}-correl-img{}-{}kernel'.format(obj, dist, N_IMGS_OPTIONS[0], KERNEL_SIZES[0]))
+            out = Path('correl')
+            output_path = out / 'results'
+            output_path.mkdir(parents=True, exist_ok=True)
 
-            t_preprocessing_done = time.time()
-            print(f"Pré-processamento de imagens concluído em {t_preprocessing_done - t_run_start:.2f} s")
-
-            print("Construindo grade 3D e iniciando a correlação...")
-            Zscan.points3d(x_lim=GRID_LIMITS['x'], y_lim=GRID_LIMITS['y'], z_lim=GRID_LIMITS['z'],
-                           xy_step=GRID_STEPS['xy'], z_step=GRID_STEPS['z'])
+            t_start_total = time.time()
             
-            xyz_gpu, corr_gpu, _ = Zscan.process_segmented_z(
-                Kx=kernel, Ky=kernel, stride=1, Nz_block_voxels=40
-            )
-
-            t_correlation_done = time.time()
-            print(f"Correlação concluída em {t_correlation_done - t_preprocessing_done:.2f} s")
-
-            if xyz_gpu.numel() == 0:
-                print(f"Nenhum ponto retornado pelo processamento para {run_key}.")
-                continue
-
-            save_point_cloud(output_path / f'raw_points_{run_key}.csv', xyz_gpu, corr_gpu)
-
-            print(f"Total de pontos brutos: {xyz_gpu.shape[0]}")
-            filter_mask = corr_gpu > CORR_THRESHOLD
-            xyz_filtered_gpu = xyz_gpu[filter_mask]
-            corr_filtered_gpu = corr_gpu[filter_mask]
-            print(f"Pontos com correlação > {CORR_THRESHOLD}: {xyz_filtered_gpu.shape[0]}")
-            
-            if xyz_filtered_gpu.numel() > 0:
-                save_point_cloud(output_path / f'filtered_points_{run_key}_corr{CORR_THRESHOLD}.csv', 
-                                 xyz_filtered_gpu, corr_filtered_gpu)
-
-                print("\nAplicando filtro espacial de outliers...")
-                final_xyz_gpu, final_corr_gpu = Zscan.filter_sparse_points(
-                    xyz_gpu=xyz_filtered_gpu, corr_gpu=corr_filtered_gpu,
-                    min_neighbors=SPATIAL_FILTER_MIN_NEIGHBORS, radius=SPATIAL_FILTER_RADIUS
-                )
-                print(f"Pontos após o filtro espacial: {final_xyz_gpu.shape[0]}")
+            try:
+                left_path = IMAGES_PATH / 'left'
+                right_path = IMAGES_PATH / 'right'
+                left_imgs_list = sorted([p.name for p in left_path.iterdir()])
+                right_imgs_list = sorted([p.name for p in right_path.iterdir()])
+                if not left_imgs_list or not right_imgs_list:
+                    print(f"Erro: Não foram encontradas imagens em {IMAGES_PATH}")
+                    return
+            except FileNotFoundError:
+                print(f"Erro: Diretório de imagens não encontrado: {IMAGES_PATH}")
+                return
                 
-                if final_xyz_gpu.numel() > 0:
-                    save_point_cloud(output_path / f'final_points_{run_key}_rad{SPATIAL_FILTER_RADIUS}_neigh{SPATIAL_FILTER_MIN_NEIGHBORS}.csv',
-                                     final_xyz_gpu, final_corr_gpu)
+            print('Imagens encontradas. Processamento iniciado...')
 
-            t_run_end = time.time()
-            print(f"======== Concluído: {run_key} em {t_run_end - t_run_start:.2f} s ========")
+            def read_images_from_disk(path: Path, images_list: list, n_imgs: int) -> list:
+                return [cv2.imread(str(path / img_name), cv2.IMREAD_GRAYSCALE) for img_name in images_list[:n_imgs]]
 
-    t_end_total = time.time()
-    print(f"\nProcessamento total concluído em {t_end_total - t_start_total:.2f} s.")
-    print(f"Resultados salvos em: {output_path.resolve()}")
+            for n_img in N_IMGS_OPTIONS:
+                for kernel in KERNEL_SIZES:
+                    run_key = f"imgs{n_img}_kernel{kernel}"
+                    print(f'\n======== Iniciando: {run_key} ========')
+                    
+                    t_run_start = time.time()
+
+                    Zscan = PyTorchStereoCorrel(yaml_file=YAML_FILE)
+                    
+                    run_grid_diagnostics(Zscan, GRID_LIMITS, GRID_STEPS)
+
+                    print(f"Carregando {n_img} pares de imagens...")
+                    left_imgs_cpu = read_images_from_disk(left_path, left_imgs_list, n_img)
+                    right_imgs_cpu = read_images_from_disk(right_path, right_imgs_list, n_img)
+                    
+                    print("Convertendo imagens (CLAHE, Undistort)...")
+                    Zscan.convert_images(left_imgs_cpu, right_imgs_cpu, apply_clahe=True, undist=True)
+                    del left_imgs_cpu, right_imgs_cpu
+
+                    t_preprocessing_done = time.time()
+                    print(f"Pré-processamento de imagens concluído em {t_preprocessing_done - t_run_start:.2f} s")
+
+                    print("Construindo grade 3D e iniciando a correlação...")
+                    Zscan.points3d(x_lim=GRID_LIMITS['x'], y_lim=GRID_LIMITS['y'], z_lim=GRID_LIMITS['z'],
+                                xy_step=GRID_STEPS['xy'], z_step=GRID_STEPS['z'])
+                    
+                    xyz_gpu, corr_gpu, _ = Zscan.process_segmented_z(
+                        Kx=kernel, Ky=kernel, stride=1, Nz_block_voxels=40
+                    )
+
+                    t_correlation_done = time.time()
+                    print(f"Correlação concluída em {t_correlation_done - t_preprocessing_done:.2f} s")
+
+                    if xyz_gpu.numel() == 0:
+                        print(f"Nenhum ponto retornado pelo processamento para {run_key}.")
+                        continue
+
+                    # save_point_cloud(output_path / '{}-{}-correl-{}img-{}kernel.csv', xyz_gpu, corr_gpu)
+
+                    print(f"Total de pontos brutos: {xyz_gpu.shape[0]}")
+                    filter_mask = corr_gpu > CORR_THRESHOLD
+                    xyz_filtered_gpu = xyz_gpu[filter_mask]
+                    corr_filtered_gpu = corr_gpu[filter_mask]
+                    print(f"Pontos com correlação > {CORR_THRESHOLD}: {xyz_filtered_gpu.shape[0]}")
+                    
+                    if xyz_filtered_gpu.numel() > 0:
+                        # save_point_cloud(output_path / f'filtered_points_{run_key}_corr{CORR_THRESHOLD}.csv', 
+                                        # xyz_filtered_gpu, corr_filtered_gpu)
+
+                        print("\nAplicando filtro espacial de outliers...")
+                        final_xyz_gpu, final_corr_gpu = Zscan.filter_sparse_points(
+                            xyz_gpu=xyz_filtered_gpu, corr_gpu=corr_filtered_gpu,
+                            min_neighbors=SPATIAL_FILTER_MIN_NEIGHBORS, radius=SPATIAL_FILTER_RADIUS
+                        )
+                        print(f"Pontos após o filtro espacial: {final_xyz_gpu.shape[0]}")
+                        
+                        if final_xyz_gpu.numel() > 0:
+                            save_point_cloud(output_path / '{}-{}-correl-{}img-{}kernel.csv'.format(obj, dist, N_IMGS_OPTIONS[0], KERNEL_SIZES[0]),
+                                            final_xyz_gpu, final_corr_gpu)
+
+                    t_run_end = time.time()
+                    print(f"======== Concluído: {run_key} em {t_run_end - t_run_start:.2f} s ========")
+                    # Zscan.plot_3d_points(x=final_xyz_gpu[:,0].cpu().numpy(),
+                    #                     y=final_xyz_gpu[:,1].cpu().numpy(),
+                    #                     z=final_xyz_gpu[:,2].cpu().numpy(),
+                    #                     color=final_corr_gpu.cpu().numpy(),
+                    #                     title=f'Pontos 3D - {run_key}')
+
+            t_end_total = time.time()
+            print(f"\nProcessamento total concluído em {t_end_total - t_start_total:.2f} s.")
+            print(f"Resultados salvos em: {output_path.resolve()}")
 
 if __name__ == "__main__":
     if torch.cuda.is_available():

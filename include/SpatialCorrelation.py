@@ -95,7 +95,7 @@ class StereoTemporalSpatialCorrel:
                             
         return images
 
-    def convert_images(self, left_imgs, right_imgs, apply_clahe=False, tile=11, climp=5.0, undist=False):
+    def convert_images(self, left_imgs_cpu, right_imgs_cpu, apply_clahe=False, tile=11, climp=5.0, undist=False):
         """
         Convert images to CuPy arrays for GPU processing.
         Optionally apply CLAHE (Contrast Limited Adaptive Histogram Equalization).
@@ -103,15 +103,15 @@ class StereoTemporalSpatialCorrel:
         if apply_clahe:
             clahe = cv2.createCLAHE(clipLimit=climp, tileGridSize=(tile, tile))
             if undist:
-                left_imgs = [self.remove_img_distortion(clahe.apply(img), 'left') for img in left_imgs]
-                right_imgs = [self.remove_img_distortion(clahe.apply(img), 'right') for img in right_imgs]
+                left_imgs_cpu = [self.remove_img_distortion(clahe.apply(img), 'left') for img in left_imgs_cpu]
+                right_imgs_cpu = [self.remove_img_distortion(clahe.apply(img), 'right') for img in right_imgs_cpu]
             else:
-                left_imgs = [clahe.apply(img) for img in left_imgs]
-                right_imgs = [clahe.apply(img) for img in right_imgs]
+                left_imgs_cpu = [clahe.apply(img) for img in left_imgs_cpu]
+                right_imgs_cpu = [clahe.apply(img) for img in right_imgs_cpu]
 
 
-        self.left_images = cp.asarray(np.stack(left_imgs, axis=-1)).astype(cp.uint8)
-        self.right_images = cp.asarray(np.stack(right_imgs, axis=-1)).astype(cp.uint8)
+        self.left_images = cp.asarray(np.stack(left_imgs_cpu, axis=-1)).astype(cp.uint8)
+        self.right_images = cp.asarray(np.stack(right_imgs_cpu, axis=-1)).astype(cp.uint8)
         return True
 
     def remove_img_distortion(self, img, camera):
@@ -643,7 +643,7 @@ class StereoTemporalSpatialCorrel:
 
         return xyz_final, corr_final, corrmap_final, stdL_final, stdR_final
     
-    def process_segmented_z(self, Kx=5, Ky=5, stride=1, batch_size=None, Nz_block=50, save_correlation=False):
+    def process_segmented_z(self, Kx=5, Ky=5, stride=1, Nz_block_voxels=50, save_correlation=False):
         """
         Segmenta o volume ao longo de Z para reduzir uso de memória.
         Reutiliza self.process() e acumula o melhor valor de correlação por voxel.
@@ -672,8 +672,8 @@ class StereoTemporalSpatialCorrel:
         stdR_all = []
         corr_all_blocks = []
 
-        for z0 in range(0, Nz_total, Nz_block):
-            z1 = min(z0 + Nz_block, Nz_total)
+        for z0 in range(0, Nz_total, Nz_block_voxels):
+            z1 = min(z0 + Nz_block_voxels, Nz_total)
 
             # Fatia grid ao longo de Z
             self.grid = grid_backup[:, :, z0:z1, :]
