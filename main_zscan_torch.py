@@ -31,32 +31,6 @@ def save_point_cloud(filename: str | Path, xyz: torch.Tensor, corr: Optional[tor
     np.savetxt(filename, data, delimiter=delimiter, header=header_str, comments='')
     print(f"Nuvem de pontos salva em {filename}")
 
-def run_grid_diagnostics(scanner: PyTorchStereoCorrel, limits: dict, steps: dict):
-    """
-    Executa um diagnóstico de sensibilidade do grid, verificando como os passos
-    no espaço 3D se traduzem em movimento de pixels na imagem.
-    """
-    print("\n[Diagnóstico] Calculando a sensibilidade do grid para os parâmetros atuais...")
-    
-    x_mid = limits['x'][0] + (limits['x'][1] - limits['x'][0]) / 2
-    y_mid = limits['y'][0] + (limits['y'][1] - limits['y'][0]) / 2
-    z_mid = limits['z'][0] + (limits['z'][1] - limits['z'][0]) / 2
-
-    p_center = torch.tensor([[x_mid, y_mid, z_mid]], dtype=torch.float32, device=scanner.device)
-    p_step_x = torch.tensor([[x_mid + steps['xy'], y_mid, z_mid]], dtype=torch.float32, device=scanner.device)
-    p_step_z = torch.tensor([[x_mid, y_mid, z_mid + steps['z']]], dtype=torch.float32, device=scanner.device)
-
-    uv_center = scanner.transform_gcs2ccs(p_center, 'left')
-    uv_step_x = scanner.transform_gcs2ccs(p_step_x, 'left')
-    uv_step_z = scanner.transform_gcs2ccs(p_step_z, 'left')
-
-    if uv_center.min() > 0 and uv_step_x.min() > 0 and uv_step_z.min() > 0:
-        dist_pix_x = torch.linalg.norm(uv_step_x - uv_center).item()
-        dist_pix_z = torch.linalg.norm(uv_step_z - uv_center).item()
-
-        print(f"  > Passo XY de {steps['xy']:.1f} mm equivale a um deslocamento de {dist_pix_x:.3f} pixels na imagem.")
-        print(f"  > Passo Z de {steps['z']:.1f} mm equivale a um deslocamento de {dist_pix_z:.3f} pixels na imagem.")
-    print("-" * 20)
 
 def main():
     """Função principal para executar o pipeline de correlação estéreo."""
@@ -65,25 +39,30 @@ def main():
     # YAML_FILE = 'cfg/SM4.yaml' # Yaml file with camera parameters
 
 
-    objects = [ 'esfera', 'plano']
+    objects = [ 'calota']#, 'plano']
 
     distances = [1150, 1300, 1450, 1600, 1750, 1900, 2050]
-    # distances =[1450]
+    distances =[1050]
     offset = 800
-    dz = 200
+    dz = 150
     plot = True #plot 3D points of two iterations
     debug = False #plot debug images
-    method = ['spatial']#,  # 'correl', 'spatial', 'fringe'
+    save_file = False # save csv file with point cloud
+    euclidian_filter = True # apply euclidean filter
+    mask_std = True # apply STD MASK\n
+    mask_uv = True # apply uv mask
+    method = [ 'spatial']#,  # 'correl', 'spatial', 'fringe'
     # method = ['fringe']  # 'correl', 'spatial', 'fringe',
 
     GRID_STEPS_1 = {'xy': 2.0, 'z': 2} # first steps of 3d patch
     GRID_STEPS_2 = {'xy': 1, 'z': 0.1} # second steps of 3d patch
     
     Zscan = PyTorchStereoCorrel(yaml_file=YAML_FILE)
-    run_grid_diagnostics(Zscan, {'x': (0, 500), 'y': (0, 400), 'z': (-100,100)}, GRID_STEPS_1)
-    run_grid_diagnostics(Zscan, {'x': (0, 500), 'y': (0, 400), 'z': (-100,100)}, GRID_STEPS_2)
 
-    black_factor = 1 # 0 to 1
+    Zscan.run_grid_diagnostics( {'x': (0, 500), 'y': (0, 400), 'z': (-100,100)}, GRID_STEPS_1)
+    Zscan.run_grid_diagnostics( {'x': (0, 500), 'y': (0, 400), 'z': (-100,100)}, GRID_STEPS_2)
+
+    black_factor = 1# 0 to 1 
 
     for method in method:
         for obj in objects:
@@ -91,21 +70,22 @@ def main():
                 print('=' * 50)
                 print(f"\nIniciando processamento para {obj} a {dist} mm usando o método {method}...")
                 # IMAGES_PATH = Path('20250513_1505_step10_calota_d2')
-                IMAGES_PATH = Path('/home/daniel/Insync/daniel.regner@labmetro.ufsc.br/Google Drive - Shared drives/VORIS - Media/Experimentos/Sistemas Ativo - Congresso Metrologia 2025/20250722_2/correl/{}/{}'.format( obj, dist))
+                # IMAGES_PATH = Path('./correl/{}/{}'.format( obj, dist))
+                IMAGES_PATH = Path('./{}/{}'.format(method, obj))
                 if method == 'spatial':
                     N_IMGS_OPTIONS = [5]
                     KERNEL_SIZES = [3]
-                    FILTER_THRESHOLD = 0.7
+                    FILTER_THRESHOLD = 0.6
                     FILTER_RADIUS =15.0
                     FILTER_MIN_NEIGHBORS = 5
-                    MASK_BOUNDS = 20 # Limites do desvio padrão dos pontos interpolados nas T imagens
+                    MASK_BOUNDS = 5 # Limites do desvio padrão dos pontos interpolados nas T imagens
                 if method == 'correl':
                     N_IMGS_OPTIONS = [15]
                     KERNEL_SIZES = [1]
-                    FILTER_THRESHOLD = 0.85
+                    FILTER_THRESHOLD = 0.9
                     FILTER_RADIUS = 15.0
                     FILTER_MIN_NEIGHBORS = 5
-                    MASK_BOUNDS = 20 # Limites do desvio padrão dos pontos interpolados nas T imagens
+                    MASK_BOUNDS = 30 # Limites do desvio padrão dos pontos interpolados nas T imagens
 
                 if method == 'fringe':
                     N_IMGS_OPTIONS = [1]
@@ -156,7 +136,9 @@ def main():
                 if method == 'fringe':
                     # print(f"Carregando {n_img} pares de imagens...")
                     left_imgs_cpu = read_images_from_disk(left_path, left_imgs_list, n_imgs=len(left_imgs_list))
+                    left_imgs_cpu = [cv2.convertScaleAbs(img, alpha=black_factor) for img in left_imgs_cpu]
                     right_imgs_cpu = read_images_from_disk(right_path, right_imgs_list, n_imgs=len(right_imgs_list))
+                    right_imgs_cpu = [cv2.convertScaleAbs(img, alpha=black_factor) for img in right_imgs_cpu]
                     fringe_imgs_proc = FringeProcess(camera_resolution=left_imgs_cpu[0].shape[::-1], px_f=PIXEL_PER_FRINGE, steps=STEPS)
                     fringe_imgs_proc.images_left = np.moveaxis(np.array(left_imgs_cpu), 0, -1)
                     fringe_imgs_proc.images_right = np.moveaxis(np.array(right_imgs_cpu),0, -1)
@@ -196,46 +178,60 @@ def main():
                         
                         xyz_gpu, corr_gpu, _ = Zscan.process_segmented_z(Kx=kernel, Ky=kernel, stride=1, Nz_block_voxels=20, method=method)
 
-                        if plot and debug:
-                            Zscan.plot_3d_points(x=xyz_gpu[:,0],
-                                                    y=xyz_gpu[:,1],
-                                                    z=xyz_gpu[:,2],
-                                                    color=corr_gpu,
-                                                    title=f'Antes de filtrar {method} - Pontos 3D: {dist} mm {n_img} imgs {kernel}x{kernel}')
-
                         t_correlation_done = time.time()
-                        print(f"Correlação concluída em {t_correlation_done - t_preprocessing_done:.2f} s")
+                        print(f"1a Correlação concluída em {t_correlation_done - t_preprocessing_done:.2f} s")
 
                         if xyz_gpu.numel() == 0:
                             print(f"Nenhum ponto retornado pelo processamento para.")
                             continue
 
-                        # save_point_cloud(output_path / '{}-{}-correl-{}img-{}kernel.csv', xyz_gpu, corr_gpu)
-
                         print(f"Total de pontos brutos: {xyz_gpu.shape[0]}")
                         if method == 'fringe':
                             filter_mask = corr_gpu < FILTER_THRESHOLD
+                            xyz_filtered_gpu = xyz_gpu[filter_mask]
+                            corr_filtered_gpu = corr_gpu[filter_mask]
+                            print(f"Pontos com correlação < {FILTER_THRESHOLD} rad: {xyz_filtered_gpu.shape[0]}")
                         else:
                             filter_mask = corr_gpu > FILTER_THRESHOLD
+                            xyz_filtered_gpu = xyz_gpu[filter_mask]
+                            corr_filtered_gpu = corr_gpu[filter_mask]
+                            print(f"Pontos com correlação > {FILTER_THRESHOLD*100}%: {xyz_filtered_gpu.shape[0]}")
+                        
+                        if debug:
+                            Zscan.plot_3d_points(x=xyz_filtered_gpu[:,0],
+                                                y=xyz_filtered_gpu[:,1],
+                                                z=xyz_filtered_gpu[:,2],
+                                                color=corr_filtered_gpu,
+                                                title=f'1a {method} - Pontos 3D: {dist} mm {n_img} imgs {kernel}x{kernel}')
 
-                        xyz_filtered_gpu = xyz_gpu[filter_mask]
-                        corr_filtered_gpu = corr_gpu[filter_mask]
-                        xyz_filtered_gpu, corr_filtered_gpu, interp_filtered = Zscan.mask_points(xyz_filtered_gpu, corr_filtered_gpu, bounds=MASK_BOUNDS, method=method)
+                        if mask_uv:
+                            xyz_filtered_gpu, corr_filtered_gpu, interp_filtered = Zscan.mask_uv_points(xyz_filtered_gpu, corr_filtered_gpu, bounds=MASK_BOUNDS, method=method)
+                            if debug:
+                                Zscan.plot_3d_points(x=xyz_filtered_gpu[:,0],
+                                                    y=xyz_filtered_gpu[:,1],
+                                                    z=xyz_filtered_gpu[:,2],
+                                                    color=interp_filtered,
+                                                    title=f'DEBUG UV MASK {method} - Pontos 3D filtrados UV: {dist} mm {n_img} imgs {kernel}x{kernel}')
+                        if mask_std:
+                            xyz_filtered_gpu, corr_filtered_gpu, interp_filtered = Zscan.std_mask_points(xyz_filtered_gpu, corr_filtered_gpu, bounds=MASK_BOUNDS, method=method)
+                            if debug:
+                                Zscan.plot_3d_points(x=xyz_filtered_gpu[:,0],
+                                                    y=xyz_filtered_gpu[:,1],
+                                                    z=xyz_filtered_gpu[:,2],
+                                                    color=interp_filtered,
+                                                    title=f'DEBUG STD MASK\n {method} - Pontos 3D filtrados UV: {dist} mm {n_img} imgs {kernel}x{kernel}')
 
-                        print(f"Pontos com correlação > {FILTER_THRESHOLD}: {xyz_filtered_gpu.shape[0]}")
-                        # final_xyz_gpu, final_corr_gpu = Zscan.filter_sparse_points(
-                        #         xyz_gpu=xyz_filtered_gpu, corr_gpu=corr_filtered_gpu,
-                        #         min_neighbors=SPATIAL_FILTER_MIN_NEIGHBORS, radius=SPATIAL_FILTER_RADIUS
-                        #     )
-                        final_xyz_gpu, final_corr_gpu, interp = Zscan.euclidean_filter(xyz_gpu=xyz_filtered_gpu, corr_gpu=corr_filtered_gpu, interp=interp_filtered, 
-                                                                      min_neighbors=FILTER_MIN_NEIGHBORS, radius=FILTER_RADIUS)
-                        # final_xyz_gpu = xyz_filtered_gpu
-                        # final_corr_gpu = corr_filtered_gpu
+                        if euclidian_filter:
+                            final_xyz_gpu, final_corr_gpu, interp = Zscan.euclidean_filter(xyz_gpu=xyz_filtered_gpu, corr_gpu=corr_filtered_gpu, interp=interp_filtered, 
+                                                                        min_neighbors=FILTER_MIN_NEIGHBORS, radius=FILTER_RADIUS)
+                        else:
+                            final_xyz_gpu, final_corr_gpu, interp = xyz_filtered_gpu, corr_filtered_gpu, interp_filtered
+
                         if plot:
                             Zscan.plot_3d_points(x=final_xyz_gpu[:,0],
                                                 y=final_xyz_gpu[:,1],
                                                 z=final_xyz_gpu[:,2],
-                                                color=interp,
+                                                color=final_corr_gpu,
                                                 title=f'1a {method} - Pontos 3D: {dist} mm {n_img} imgs {kernel}x{kernel}')
                             
                         xlim = torch.min(final_xyz_gpu[:, 0]), torch.max(final_xyz_gpu[:, 0])
@@ -256,13 +252,6 @@ def main():
                             print(f"Nenhum ponto retornado pelo processamento para.")
                             continue
                         
-                        # if xyz_filtered_gpu.numel() > 0:
-                        #     print("\nAplicando filtro espacial de outliers...")
-                        #     final_xyz_gpu, final_corr_gpu = Zscan.filter_sparse_points(
-                        #         xyz_gpu=xyz_filtered_gpu, corr_gpu=corr_filtered_gpu,
-                        #         min_neighbors=SPATIAL_FILTER_MIN_NEIGHBORS, radius=SPATIAL_FILTER_RADIUS
-                        #     )
-                        #     print(f"Pontos após o filtro espacial: {final_xyz_gpu.shape[0]}")
 
                         print(f"Total de pontos brutos: {xyz_gpu.shape[0]}")
                         if method == 'fringe':
@@ -272,22 +261,35 @@ def main():
 
                         xyz_filtered_gpu = xyz_gpu[filter_mask]
                         corr_filtered_gpu = corr_gpu[filter_mask]
-                        xyz_filtered_gpu, corr_filtered_gpu, interp_filtered = Zscan.mask_points(xyz_filtered_gpu, corr_filtered_gpu, bounds=MASK_BOUNDS, method=method)
 
+                        if mask_uv:
+                            xyz_filtered_gpu, corr_filtered_gpu, interp_filtered = Zscan.mask_uv_points(xyz_filtered_gpu, corr_filtered_gpu, bounds=MASK_BOUNDS, method=method)
+                            if debug:
+                                Zscan.plot_3d_points(x=xyz_filtered_gpu[:,0],
+                                                    y=xyz_filtered_gpu[:,1],
+                                                    z=xyz_filtered_gpu[:,2],
+                                                    color=interp_filtered,
+                                                    title=f'DEBUG UV MASK {method} - Pontos 3D filtrados UV: {dist} mm {n_img} imgs {kernel}x{kernel}')
+                        if mask_std:
+                            xyz_filtered_gpu, corr_filtered_gpu, interp_filtered = Zscan.std_mask_points(xyz_filtered_gpu, corr_filtered_gpu, bounds=MASK_BOUNDS, method=method)
+                            if debug:
+                                Zscan.plot_3d_points(x=xyz_filtered_gpu[:,0],
+                                                    y=xyz_filtered_gpu[:,1],
+                                                    z=xyz_filtered_gpu[:,2],
+                                                    color=interp_filtered,
+                                                    title=f'DEBUG STD MASK\n {method} - Pontos 3D filtrados UV: {dist} mm {n_img} imgs {kernel}x{kernel}')
                         print(f"Pontos com correlação > {FILTER_THRESHOLD}: {xyz_filtered_gpu.shape[0]}")
-                        # final_xyz_gpu, final_corr_gpu = Zscan.filter_sparse_points(
-                        #         xyz_gpu=xyz_filtered_gpu, corr_gpu=corr_filtered_gpu,
-                        #         min_neighbors=SPATIAL_FILTER_MIN_NEIGHBORS, radius=SPATIAL_FILTER_RADIUS
-                        #     )
-                        final_xyz_gpu, final_corr_gpu, interp = Zscan.euclidean_filter(xyz_gpu=xyz_filtered_gpu, corr_gpu=corr_filtered_gpu, interp=interp_filtered, 
-                                                                      min_neighbors=FILTER_MIN_NEIGHBORS, radius=FILTER_RADIUS)
+                        if euclidian_filter:
+                            final_xyz_gpu, final_corr_gpu, _ = Zscan.euclidean_filter(xyz_gpu=xyz_filtered_gpu, corr_gpu=corr_filtered_gpu, interp=interp_filtered, 
+                                                                        min_neighbors=FILTER_MIN_NEIGHBORS+10, radius=FILTER_RADIUS)
+                        else:
+                            final_xyz_gpu, final_corr_gpu, _ = xyz_filtered_gpu, corr_filtered_gpu, interp_filtered
                         
-                        # final_xyz_gpu = xyz_filtered_gpu
-                        # final_corr_gpu = corr_filtered_gpu
                         
                         if final_xyz_gpu.numel() > 0:
-                            save_point_cloud(output_path / '{}-{}-correl-{}img-{}kernel.csv'.format(obj, dist, n_img, kernel),
-                                            final_xyz_gpu, final_corr_gpu)
+                            if save_file:
+                                save_point_cloud(output_path / '{}-{}-correl-{}img-{}kernel.csv'.format(obj, dist, n_img, kernel),
+                                                final_xyz_gpu, final_corr_gpu)
 
                         t_run_end = time.time()
                         print(f"======== Concluído: em {t_run_end - t_run_start:.2f} s ========")
@@ -295,7 +297,7 @@ def main():
                             Zscan.plot_3d_points(x=final_xyz_gpu[:,0],
                                                 y=final_xyz_gpu[:,1],
                                                 z=final_xyz_gpu[:,2],
-                                                color=interp,
+                                                color=final_corr_gpu,
                                                 title=f'2a  {method} - Pontos 3D: {dist} mm {n_img} imgs {kernel}x{kernel}')
 
                 t_end_total = time.time()

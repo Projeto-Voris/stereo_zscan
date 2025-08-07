@@ -25,6 +25,34 @@ class PyTorchStereoCorrel(nn.Module):
         self.epsilon = 1e-10
         self.camera_params = self.read_yaml_file(yaml_file)
 
+
+    def run_grid_diagnostics(self, limits: dict, steps: dict):
+        """
+        Executa um diagnóstico de sensibilidade do grid, verificando como os passos
+        no espaço 3D se traduzem em movimento de pixels na imagem.
+        """
+        print("\n[Diagnóstico] Calculando a sensibilidade do grid para os parâmetros atuais...")
+        
+        x_mid = limits['x'][0] + (limits['x'][1] - limits['x'][0]) / 2
+        y_mid = limits['y'][0] + (limits['y'][1] - limits['y'][0]) / 2
+        z_mid = limits['z'][0] + (limits['z'][1] - limits['z'][0]) / 2
+
+        p_center = torch.tensor([[x_mid, y_mid, z_mid]], dtype=torch.float32, device=self.device)
+        p_step_x = torch.tensor([[x_mid + steps['xy'], y_mid, z_mid]], dtype=torch.float32, device=self.device)
+        p_step_z = torch.tensor([[x_mid, y_mid, z_mid + steps['z']]], dtype=torch.float32, device=self.device)
+
+        uv_center = self.transform_gcs2ccs(p_center, 'left')
+        uv_step_x = self.transform_gcs2ccs(p_step_x, 'left')
+        uv_step_z = self.transform_gcs2ccs(p_step_z, 'left')
+
+        if uv_center.min() > 0 and uv_step_x.min() > 0 and uv_step_z.min() > 0:
+            dist_pix_x = torch.linalg.norm(uv_step_x - uv_center).item()
+            dist_pix_z = torch.linalg.norm(uv_step_z - uv_center).item()
+
+            print(f"  > Passo XY de {steps['xy']:.1f} mm equivale a um deslocamento de {dist_pix_x:.3f} pixels na imagem.")
+            print(f"  > Passo Z de {steps['z']:.1f} mm equivale a um deslocamento de {dist_pix_z:.3f} pixels na imagem.")
+        print("-" * 20)
+
     def read_yaml_file(self, yaml_file: str) -> dict:
         """Lê os parâmetros de calibração de um arquivo YAML e os retorna."""
         with open(yaml_file) as file:
@@ -226,10 +254,10 @@ class PyTorchStereoCorrel(nn.Module):
 
         return xyz_final, corr_overall, z_best_indices_overall
 
-    def mask_points(self, xyz_gpu: torch.Tensor, corr_gpu: torch.Tensor, bounds, method='correl') -> Tuple[torch.Tensor, torch.Tensor]:
+    def std_mask_points(self, xyz_gpu: torch.Tensor, corr_gpu: torch.Tensor, bounds, method='correl') -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
 
-        uv_left_final, uv_left_final_mask = self.transform_gcs2ccs(xyz_gpu, 'left', image_shape=self.left_images.shape[1:])
-        uv_right_final, uv_right_final_mask = self.transform_gcs2ccs(xyz_gpu, 'right', image_shape=self.right_images.shape[1:])
+        uv_left_final, _ = self.transform_gcs2ccs(xyz_gpu, 'left', image_shape=self.left_images.shape[1:])
+        uv_right_final, _ = self.transform_gcs2ccs(xyz_gpu, 'right', image_shape=self.right_images.shape[1:])
         L_interp, R_interp = self.interpolate_images(self.left_images, uv_left_final), self.interpolate_images(self.right_images, uv_right_final)
 
         if method == 'fringe':
@@ -240,7 +268,21 @@ class PyTorchStereoCorrel(nn.Module):
             std_mask = (bounds < L_std) & (bounds < R_std)
             L_masked = L_std
 
-        combined_mask = uv_left_final_mask & uv_right_final_mask & std_mask
+        combined_mask = std_mask
+        xyz_masked = xyz_gpu[combined_mask]
+        corr_masked = corr_gpu[combined_mask]
+        L_masked = L_masked[combined_mask]
+
+
+        return xyz_masked, corr_masked, L_masked 
+       
+    def mask_uv_points(self, xyz_gpu: torch.Tensor, corr_gpu: torch.Tensor, bounds, method='correl') -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+
+        uv_left_final, uv_left_final_mask = self.transform_gcs2ccs(xyz_gpu, 'left', image_shape=self.left_images.shape[1:])
+        _, uv_right_final_mask = self.transform_gcs2ccs(xyz_gpu, 'right', image_shape=self.right_images.shape[1:])
+        L_masked = self.interpolate_images(self.left_images, uv_left_final)[:,0]
+
+        combined_mask = uv_left_final_mask & uv_right_final_mask
         xyz_masked = xyz_gpu[combined_mask]
         corr_masked = corr_gpu[combined_mask]
         L_masked = L_masked[combined_mask]
