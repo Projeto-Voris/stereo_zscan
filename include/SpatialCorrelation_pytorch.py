@@ -5,12 +5,17 @@ import torch.nn.functional as F
 import yaml
 import matplotlib.pyplot as plt
 import cv2
-from scipy.spatial import cKDTree
-from typing import Tuple
 
-class PyTorchStereoCorrel(nn.Module):
+from scipy.spatial import cKDTree
+from scipy.interpolate import griddata
+
+from typing import Tuple
+from include.PlotClass import PlotClass
+
+class PyTorchStereoCorrel(nn.Module, PlotClass):
     def __init__(self, yaml_file):
-        super().__init__()
+        nn.Module.__init__(self)
+        PlotClass.__init__(self)
 
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         print(f"PyTorch a ser executado no dispositivo: {self.device}")
@@ -21,6 +26,7 @@ class PyTorchStereoCorrel(nn.Module):
         self.x_vals: torch.Tensor | None = None
         self.y_vals: torch.Tensor | None = None
         self.z_vals: torch.Tensor | None = None
+        self.z_surface: torch.Tensor | None = None
 
         self.epsilon = 1e-10
         self.camera_params = self.read_yaml_file(yaml_file)
@@ -247,6 +253,11 @@ class PyTorchStereoCorrel(nn.Module):
 
         x_coords_final = self.x_vals[IX_centers]
         y_coords_final = self.y_vals[IY_centers]
+
+        if self.z_surface is not None:
+            z_best_values_overall = self.z_surface[IX_centers, IY_centers] + z_best_indices_overall
+            self.z_surface = None
+
         
         xyz_final = torch.stack([x_coords_final, y_coords_final, z_best_values_overall], dim=1).to(torch.float32)
 
@@ -280,7 +291,7 @@ class PyTorchStereoCorrel(nn.Module):
 
         uv_left_final, uv_left_final_mask = self.transform_gcs2ccs(xyz_gpu, 'left', image_shape=self.left_images.shape[1:])
         _, uv_right_final_mask = self.transform_gcs2ccs(xyz_gpu, 'right', image_shape=self.right_images.shape[1:])
-        L_masked = self.interpolate_images(self.left_images, uv_left_final)[:,0]
+        L_masked = self.interpolate_images(self.left_images, uv_left_final).mean(axis=1)
 
         combined_mask = uv_left_final_mask & uv_right_final_mask
         xyz_masked = xyz_gpu[combined_mask]
@@ -290,29 +301,6 @@ class PyTorchStereoCorrel(nn.Module):
 
         return xyz_masked, corr_masked, L_masked
     
-    def filter_sparse_points(self, xyz_gpu: torch.Tensor, corr_gpu: torch.Tensor, min_neighbors: int = 5, radius: float = 10.0) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Filtra pontos 3D esparsos com base na densidade de vizinhos.
-
-        Args:
-            xyz_gpu (torch.Tensor): Tensor com as coordenadas (N, 3) dos pontos.
-            corr_gpu (torch.Tensor): Tensor com os valores de correlação (N,).
-            min_neighbors (int): Número mínimo de vizinhos em um raio para um ponto ser mantido.
-            radius (float): O raio para a busca de vizinhos.
-
-        Returns:
-            Tuple[torch.Tensor, torch.Tensor]: Um par de tensores (xyz, corr) contendo apenas os pontos densos.
-        """
-        if xyz_gpu.numel() == 0:
-            return xyz_gpu, corr_gpu
-        
-        xyz_cpu = xyz_gpu.cpu().numpy()
-        tree = cKDTree(xyz_cpu)
-    
-        neighbor_counts = tree.query_ball_point(xyz_cpu, r=radius, return_length=True)
-        dense_mask = neighbor_counts >= min_neighbors
-
-        return xyz_gpu[dense_mask], corr_gpu[dense_mask]
-
     def euclidean_filter(self, xyz_gpu: torch.Tensor, corr_gpu: torch.Tensor, interp: torch.Tensor, min_neighbors: int = 5, radius: float = 10.0, batch_size=1024) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         n = xyz_gpu.shape[0]
         final_mask = torch.zeros(n, dtype=torch.bool, device=xyz_gpu.device)
@@ -349,18 +337,55 @@ class PyTorchStereoCorrel(nn.Module):
         # Aplica a máscara final aos tensores originais
         return xyz_gpu[final_mask], corr_gpu[final_mask], interp[final_mask]
 
-    def plot_3d_points(self, x, y, z, color=None, title='Plot 3D'):
-        def to_numpy(tensor):
-            if isinstance(tensor, torch.Tensor):
-                return tensor.cpu().numpy()
-            return tensor
-        
-        fig = plt.figure(figsize=(10, 8))
-        ax = fig.add_subplot(111, projection='3d')
-        ax.title.set_text(title)
+    def interpolate_surface_grid(self, xyz_valid, X, Y, method="nearest"):
+        """
+        xyz_valid: (N,3) pontos válidos (x,y,z)
+        X,Y: meshgrid (Nx,Ny)
+        """
+        pts = xyz_valid[:, :2].cpu().numpy()
+        vals = xyz_valid[:, 2].cpu().numpy()
+        grid_points = np.column_stack([X.cpu().numpy().ravel(), Y.cpu().numpy().ravel()])
 
-        scatter = ax.scatter(to_numpy(x), to_numpy(y), to_numpy(z), c=to_numpy(color), cmap='viridis', marker='o')
-        plt.colorbar(scatter, ax=ax, shrink=0.5, aspect=5)
-        ax.set_xlabel('X [mm]'); ax.set_ylabel('Y [mm]'); ax.set_zlabel('Z [mm]')
-        ax.set_aspect('equal', adjustable='box')
-        plt.show()
+        Z = griddata(pts, vals, grid_points, method=method)
+        # mean_z = np.nanmean(Z)  # calcula a média ignorando nans
+        # Z = np.where(np.isnan(Z), mean_z, Z)  # substitui nans pela média
+        return torch.tensor(Z.reshape(X.shape), device=xyz_valid.device, dtype=torch.float32)
+    
+    def build_surface_aligned_grid(self, xyz, dxy=1, dz=0.2, offset=10.0, debug=False):
+        """
+        Build 3D candidate grid aligned to surface Z_surface.
+        
+        Args:
+            X, Y: (Nx,Ny) meshgrid (torch)
+            Z_surface: (Nx,Ny) surface reference
+            dz: Z step size
+            offset: half range (above/below Z_surface)
+        
+        Returns:
+            grid: (Nx,Ny,Nz,3) tensor with 3D candidate points
+            z_vals: (Nz,) relative offsets
+        """
+         # 3. Nova superfície regular
+        self.x_vals = torch.arange(xyz[:,0].min(), xyz[:,0].max(), dxy, device=self.device)
+        self.y_vals = torch.arange(xyz[:,1].min(), xyz[:,1].max(), dxy, device=self.device)
+
+
+        X, Y = torch.meshgrid(self.x_vals, self.y_vals, indexing='ij')                    
+        Nx, Ny = self.x_vals.numel(), self.y_vals.numel()
+
+        # define relative Z offsets
+        self.z_vals_ = torch.arange(-offset, offset + dz, dz, device=self.device)
+        self.z_surface = self.interpolate_surface_grid(xyz, X, Y)
+        Nz = self.z_vals.numel()
+
+        # expand reference surface and add offsets
+        # shape (Nx,Ny,Nz)
+        Z_grid =self.z_surface[..., None] + self.z_vals[None, None, :]
+        if debug:
+            self.plot_Z_surface(X,Y, self.z_surface)
+        
+        # broadcast X,Y
+        X_grid = X[..., None].expand(Nx, Ny, Nz)
+        Y_grid = Y[..., None].expand(Nx, Ny, Nz)
+
+        self.grid = torch.stack([X_grid, Y_grid, Z_grid], dim=-1)  # (Nx,Ny,Nz,3)
