@@ -60,7 +60,7 @@ def main():
         print('=' * 50)
         print(f"\nIniciando processamento  usando o método {method}...")
 
-        for file in files[method][7:]:
+        for file in files[method][:]:
 
             IMAGES_PATH = Path(PATH / method / file)
             print('-' * 50)

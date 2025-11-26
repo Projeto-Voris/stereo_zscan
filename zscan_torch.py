@@ -11,7 +11,84 @@ from typing import Optional
 from include.fringe_projection.include.stereo_fringe_process import FringeProcess
 from include.SpatialCorrelation_pytorch import PyTorchStereoCorrel
 
+import matplotlib.pyplot as plt
 
+def plot_planes_xy_xz_yz(x, y=None, z=None, color=None, title: str = None,
+                         cmap: str = 'viridis', s: int = 1, alpha: float = 0.9,
+                         figsize=(15, 5), invert_z: bool = False):
+    """
+    Plota três projeções 2D (XY, XZ, YZ) com coloração.
+    Aceita torch.Tensor ou numpy.ndarray. Também aceita um único tensor (N,3) em 'x'.
+    Retorna (fig, axes).
+    """
+    # Accept (N,3) tensor in x
+    if y is None and z is None:
+        if isinstance(x, (torch.Tensor,)) and x.ndim == 2 and x.shape[1] == 3:
+            pts = x.detach().cpu().numpy()
+            x_vals, y_vals, z_vals = pts[:, 0], pts[:, 1], pts[:, 2]
+        elif isinstance(x, (np.ndarray,)) and x.ndim == 2 and x.shape[1] == 3:
+            x_vals, y_vals, z_vals = x[:, 0], x[:, 1], x[:, 2]
+        else:
+            raise ValueError("Se y e z não forem fornecidos, x deve ser (N,3).")
+    else:
+        # x,y,z provided separately
+        def to_np(arr):
+            if isinstance(arr, torch.Tensor):
+                return arr.detach().cpu().numpy()
+            return np.asarray(arr)
+        x_vals = to_np(x)
+        y_vals = to_np(y)
+        z_vals = to_np(z)
+
+    if invert_z:
+        z_vals = -z_vals
+
+    # color conversion
+    if color is None:
+        c_vals = None
+    else:
+        if isinstance(color, torch.Tensor):
+            c_vals = color.detach().cpu().numpy()
+        else:
+            c_vals = np.asarray(color)
+
+    fig, axs = plt.subplots(1, 2, figsize=figsize, squeeze=False)
+    axs = axs[0]
+
+    # sc0 = axs[0].scatter(x_vals, y_vals, c=c_vals, s=s, cmap=cmap, alpha=alpha, marker='.')
+    # axs[0].set_xlabel('X')
+    # axs[0].set_ylabel('Y')
+    # axs[0].set_title('XY plane')
+
+    sc1 = axs[0].scatter(y_vals, z_vals, c=c_vals, s=s, cmap=cmap, alpha=alpha, marker='.')
+    axs[0].set_xlabel('Y')
+    axs[0].set_ylabel('Z')
+    axs[0].set_title('YZ plane')
+    axs[0].set_ylim(-10,50)
+
+    sc2 = axs[1].scatter(y_vals, z_vals, c=c_vals, s=s, cmap=cmap, alpha=alpha, marker='.')
+    axs[1].set_xlabel('Y')
+    axs[1].set_ylabel('Z')
+    axs[1].set_title('YZ plane')
+    axs[1].set_ylim(-10,50)
+
+    for ax in axs:
+        ax.axis('equal')
+        ax.grid(False)
+
+    # shared colorbar if values provided
+    # if c_vals is not None:
+        # # anchor colorbar to all axes, place horizontally below the subplots
+        # cax = fig.colorbar(sc1, ax=axs.ravel().tolist(), pad=0.12, shrink=0.05)
+        # cax.set_label('color')
+
+    if title:
+        fig.suptitle(title)
+
+    # plt.tight_layout()
+    plt.show()
+
+    return fig, axs
 def save_point_cloud(filename: str | Path, xyz: torch.Tensor, corr: Optional[torch.Tensor] = None, delimiter: str = ','):
     """Salva uma nuvem de pontos XYZ, opcionalmente com valores de correlação."""
     if isinstance(xyz, torch.Tensor):
@@ -35,18 +112,18 @@ def save_point_cloud(filename: str | Path, xyz: torch.Tensor, corr: Optional[tor
 def main():
     """Função principal para executar o pipeline de correlação estéreo."""
     
-    YAML_FILE = 'cfg/SM4.yaml' # Yaml file with camera parameters
+    YAML_FILE = 'cfg/IMEKO.yaml' # Yaml file with camera parameters
     # YAML_FILE = 'cfg/SM4.yaml' # Yaml file with camera parameters
-    PATH = Path('g:\Drives compartilhados\VORIS - Media 2\\20250828 - Active stereo evaluation\\testes')
-    dz = 350
+    PATH = Path('g:\Drives compartilhados\VORIS - Media\Experimentos\SM3 - RRP\\2025 IMEKO - Imagens\\testes\plano')
+    dz = 250
     plot = True #plot 3D points of two iterations
     debug = False #plot debug images
     save_file = False # save csv file with point cloud
     euclidian_filter = True # apply euclidean filter
     mask_std = True # apply STD MASK\n
     mask_uv = True # apply uv mask
-    method = ['laser', 'fringe','pattern']
-    files = {mtd: sorted(os.listdir(Path(PATH / mtd))) for mtd in method}
+    method = ['laser']#, 'fringe','pattern']
+    files = {mtd: sorted(os.listdir(Path(PATH))) for mtd in method} 
     GRID_STEPS_1 = {'xy': 2.0, 'z': 2} # first steps of 3d patch
     GRID_STEPS_2 = {'xy': 1, 'z': 0.1} # second steps of 3d patch
     
@@ -63,12 +140,12 @@ def main():
 
         for file in files[method]:
 
-            IMAGES_PATH = Path(PATH / method / file)
+            IMAGES_PATH = Path(PATH / file)
 
             if method in ('laser', 'pattern'):
-                N_IMGS_OPTIONS = [3, 5]
-                KERNEL_SIZES = [3, 5]
-                FILTER_THRESHOLD = 0.8
+                N_IMGS_OPTIONS = [15]
+                KERNEL_SIZES = [1]
+                FILTER_THRESHOLD = 0.9
                 FILTER_RADIUS =15.0
                 FILTER_MIN_NEIGHBORS = 5
                 MASK_BOUNDS = 5 # Limites do desvio padrão dos pontos interpolados nas T imagens
@@ -83,7 +160,7 @@ def main():
                 FILTER_MIN_NEIGHBORS = 15
                 MASK_BOUNDS = 30 # Limites da modulação dos pontos interpolados
                 
-            GRID_LIMITS = {'x': (-100, 500), 'y': (-100, 400), 'z': (-dz, dz)}
+            GRID_LIMITS = {'x': (-100, 500), 'y': (-100, 400), 'z': (-dz, 100)}
             if save_file:
                 current_timestamp = time.strftime("%Y%m%d")
                 out = Path('{}_results'.format(current_timestamp))
@@ -186,16 +263,17 @@ def main():
                     if debug:
                         Zscan.plot_3d_points(x=xyz_filtered_gpu[:,0],
                                             y=xyz_filtered_gpu[:,1],
-                                            z=xyz_filtered_gpu[:,2],
+                                            z=xyz_filtered_gpu[:,2]*-1,
                                             color=corr_filtered_gpu,
                                             title=f'1a {method} - Pontos 3D: {n_img} imgs {kernel}x{kernel}')
+                        
 
                     if mask_uv:
                         xyz_filtered_gpu, corr_filtered_gpu, interp_filtered = Zscan.mask_uv_points(xyz_filtered_gpu, corr_filtered_gpu, bounds=MASK_BOUNDS, method=method)
                         if debug:
                             Zscan.plot_3d_points(x=xyz_filtered_gpu[:,0],
                                                 y=xyz_filtered_gpu[:,1],
-                                                z=xyz_filtered_gpu[:,2],
+                                                z=xyz_filtered_gpu[:,2]*-1,
                                                 color=interp_filtered,
                                                 title=f'DEBUG UV MASK {method} - Pontos 3D filtrados UV: {n_img} imgs {kernel}x{kernel}')
                     if mask_std:
@@ -203,7 +281,7 @@ def main():
                         if debug:
                             Zscan.plot_3d_points(x=xyz_filtered_gpu[:,0],
                                                 y=xyz_filtered_gpu[:,1],
-                                                z=xyz_filtered_gpu[:,2],
+                                                z=xyz_filtered_gpu[:,2]*-1,
                                                 color=interp_filtered,
                                                 title=f'DEBUG STD MASK\n {method} - Pontos 3D filtrados UV: {n_img} imgs {kernel}x{kernel}')
 
@@ -216,7 +294,12 @@ def main():
                     if plot:
                         Zscan.plot_3d_points(x=final_xyz_gpu[:,0],
                                             y=final_xyz_gpu[:,1],
-                                            z=final_xyz_gpu[:,2],
+                                            z=final_xyz_gpu[:,2]*-1,
+                                            color=final_corr_gpu,
+                                            title=f'1a {method} - Pontos 3D: {n_img} imgs {kernel}x{kernel}')
+                        plot_planes_xy_xz_yz(x=final_xyz_gpu[:,0],
+                                            y=final_xyz_gpu[:,1],
+                                            z=final_xyz_gpu[:,2]*-1,
                                             color=final_corr_gpu,
                                             title=f'1a {method} - Pontos 3D: {n_img} imgs {kernel}x{kernel}')
                     
@@ -260,7 +343,7 @@ def main():
                         if debug:
                             Zscan.plot_3d_points(x=xyz_filtered_gpu[:,0],
                                                 y=xyz_filtered_gpu[:,1],
-                                                z=xyz_filtered_gpu[:,2],
+                                                z=xyz_filtered_gpu[:,2]*-1,
                                                 color=interp_filtered,
                                                 title=f'DEBUG UV MASK {method} - Pontos 3D filtrados UV: {n_img} imgs {kernel}x{kernel}')
                     if mask_std:
@@ -268,7 +351,7 @@ def main():
                         if debug:
                             Zscan.plot_3d_points(x=xyz_filtered_gpu[:,0],
                                                 y=xyz_filtered_gpu[:,1],
-                                                z=xyz_filtered_gpu[:,2],
+                                                z=xyz_filtered_gpu[:,2]*-1,
                                                 color=interp_filtered,
                                                 title=f'DEBUG STD MASK\n {method} - Pontos 3D filtrados UV: {n_img} imgs {kernel}x{kernel}')
                     
@@ -289,9 +372,14 @@ def main():
                     if plot:
                         Zscan.plot_3d_points(x=final_xyz_gpu[:,0],
                                             y=final_xyz_gpu[:,1],
-                                            z=final_xyz_gpu[:,2],
+                                            z=final_xyz_gpu[:,2]*-1,
                                             color=final_corr_gpu,
                                             title=f'2a  {method} - mm {n_img} imgs {kernel}x{kernel}')
+                        plot_planes_xy_xz_yz(x=final_xyz_gpu[:,0],
+                                            y=final_xyz_gpu[:,1],
+                                            z=final_xyz_gpu[:,2]*-1,
+                                            color=final_corr_gpu,
+                                            title=f'1a {method} - Pontos 3D: {n_img} imgs {kernel}x{kernel}')
 
             t_end_total = time.time()
             print(f"\nProcessamento total concluído em {t_end_total - t_start_total:.2f} s.")
