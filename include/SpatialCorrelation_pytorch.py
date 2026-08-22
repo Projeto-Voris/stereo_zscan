@@ -73,6 +73,8 @@ class PyTorchStereoCorrel(nn.Module):
         camera_params['stereo']['R'] = torch.tensor(params['R'], dtype=torch.float32, device=self.device)
         camera_params['stereo']['T'] = torch.tensor(params['T'], dtype=torch.float32, device=self.device).view(3, 1)
 
+        # print(camera_params['stereo']['T'])
+
         return camera_params
 
     def convert_images(self, left_imgs_cpu, right_imgs_cpu, apply_clahe=True, undist=True, tile=1, climp=2.0):
@@ -83,7 +85,9 @@ class PyTorchStereoCorrel(nn.Module):
             if apply_clahe:
                 img = clahe.apply(img)
             if undist:
-                img = cv2.undistort(img, cam_params['kk'].cpu().numpy(), cam_params['kc'].cpu().numpy())
+                kk = cam_params['kk'].cpu().numpy()
+                kc = cam_params['kc'].cpu().numpy()
+                img = cv2.undistort(img, kk, kc)
             return img
 
         processed_left_imgs = [process_image(img, self.camera_params['left']) for img in left_imgs_cpu]
@@ -102,9 +106,10 @@ class PyTorchStereoCorrel(nn.Module):
         self.x_vals = torch.arange(x_lim[0], x_lim[1] + xy_step, xy_step, dtype=torch.float32, device=self.device)
         self.y_vals = torch.arange(y_lim[0], y_lim[1] + xy_step, xy_step, dtype=torch.float32, device=self.device)
         self.z_vals = torch.arange(z_lim[0], z_lim[1] + z_step, z_step, dtype=torch.float32, device=self.device)
-        
-        X, Y, Z = torch.meshgrid(self.x_vals, self.y_vals, self.z_vals, indexing='ij')
-        self.grid = torch.stack((X, Y, Z), axis=-1)
+        # The full 3-D meshgrid is intentionally NOT built here.
+        # For an 800×800×8000 grid it would require ~61 GB.  Instead, the grid
+        # is constructed lazily — one Z-block at a time — inside process_segmented_z.
+        self.grid = None  # kept for API compatibility only
 
     def transform_gcs2ccs(self, points_3d, cam_name, image_shape=None):
         k, r, t = self.camera_params[cam_name]['kk'], self.camera_params[cam_name]['r'], self.camera_params[cam_name]['t']
@@ -187,76 +192,109 @@ class PyTorchStereoCorrel(nn.Module):
         return numerator / torch.max(denominator, torch.tensor(1e-10))
 
     def process_segmented_z(self, Kx, Ky, stride=1, Nz_block_voxels=40, method='correl'):
-        Nx, Ny, Nz_total = self.grid.shape[:3]
+        Nx = len(self.x_vals)
+        Ny = len(self.y_vals)
+        Nz_total = len(self.z_vals)
         T = self.left_images.shape[0]
-        
+
         pad_x, pad_y = Kx // 2, Ky // 2
         ix_centers = torch.arange(pad_x, Nx - pad_x, stride, device=self.device)
         iy_centers = torch.arange(pad_y, Ny - pad_y, stride, device=self.device)
 
         if len(ix_centers) == 0 or len(iy_centers) == 0:
-            return torch.empty(0), torch.empty(0), torch.empty(0), torch.empty(0), torch.empty(0)
+            return torch.empty(0), torch.empty(0), torch.empty(0)
 
         IX_centers, IY_centers = torch.meshgrid(ix_centers, iy_centers, indexing='ij')
         IX_centers, IY_centers = IX_centers.ravel(), IY_centers.ravel()
         Nc_for_xy_plane = IX_centers.shape[0]
 
-        corr_map_overall_z = torch.full((Nc_for_xy_plane, Nz_total), -torch.inf, device=self.device, dtype=torch.float32)
+        # Pre-compute the flat XY grid — constant across all Z-blocks.
+        # Shape: (Nx*Ny, 2). For 800×800 this is ~5 MB, always fits in memory.
+        # indexing='ij' matches the original meshgrid ordering so downstream
+        # reshapes (.view(Nz, Nx, Ny, T)) remain correct.
+        X_2d, Y_2d = torch.meshgrid(self.x_vals, self.y_vals, indexing='ij')
+        XY_flat = torch.stack([X_2d.ravel(), Y_2d.ravel()], dim=1)  # (Nx*Ny, 2)
+        del X_2d, Y_2d
+
+        # Running best-score / best-index: O(Nc) — replaces the old
+        # corr_map_overall_z of shape (Nc, Nz_total) which was ~20 GB.
+        if method == 'fringe':
+            best_score = torch.full((Nc_for_xy_plane,), float('inf'),
+                                    device=self.device, dtype=torch.float32)
+        else:
+            best_score = torch.full((Nc_for_xy_plane,), float('-inf'),
+                                    device=self.device, dtype=torch.float32)
+        best_z_idx = torch.zeros(Nc_for_xy_plane, dtype=torch.long, device=self.device)
 
         for z0_idx in range(0, Nz_total, Nz_block_voxels):
             z1_idx = min(z0_idx + Nz_block_voxels, Nz_total)
-            # print(f"[Z-SEGMENT] Processando Z-slice: índices {z0_idx} a {z1_idx-1}")
-            
-            grid_slice = self.grid[:, :, z0_idx:z1_idx, :].to(torch.float32)
-            current_Nz_in_slice = grid_slice.shape[2]
+            z_block = self.z_vals[z0_idx:z1_idx]          # (current_Nz,)
+            current_Nz_in_slice = z1_idx - z0_idx
 
-            grid_flat_xy = grid_slice.permute(2,0,1,3).reshape(current_Nz_in_slice, Nx*Ny, 3)
-            
-            uv_left, uv_left_mask = self.transform_gcs2ccs(grid_flat_xy.reshape(-1, 3), 'left', image_shape=self.left_images.shape[1:])
-            uv_right, uv_right_mask = self.transform_gcs2ccs(grid_flat_xy.reshape(-1, 3), 'right', image_shape=self.right_images.shape[1:])
+            # Build 3-D points for this Z-block on-the-fly.
+            # Ordering: for each z in z_block, iterate over all (x, y) in XY_flat.
+            # Result shape: (current_Nz * Nx*Ny, 3) — identical ordering to the
+            # original grid_slice.permute(2,0,1,3).reshape(current_Nz, Nx*Ny, 3).reshape(-1, 3).
+            Z_col = z_block.repeat_interleave(Nx * Ny).unsqueeze(1)  # (current_Nz*Nx*Ny, 1)
+            XY_expanded = XY_flat.repeat(current_Nz_in_slice, 1)     # (current_Nz*Nx*Ny, 2)
+            grid_flat = torch.cat([XY_expanded, Z_col], dim=1)        # (current_Nz*Nx*Ny, 3)
+            del XY_expanded, Z_col
 
-            interp_L = self.interpolate_images(self.left_images, uv_left, uv_mask=uv_left_mask)
+            uv_left,  uv_left_mask  = self.transform_gcs2ccs(grid_flat, 'left',  image_shape=self.left_images.shape[1:])
+            uv_right, uv_right_mask = self.transform_gcs2ccs(grid_flat, 'right', image_shape=self.right_images.shape[1:])
+            del grid_flat
+
+            interp_L = self.interpolate_images(self.left_images,  uv_left,  uv_mask=uv_left_mask)
             interp_R = self.interpolate_images(self.right_images, uv_right, uv_mask=uv_right_mask)
             del uv_left, uv_right, uv_left_mask, uv_right_mask
             torch.cuda.empty_cache()
 
-            interp_L = interp_L.view(current_Nz_in_slice, Nx, Ny, T).permute(3,0,1,2)
-            interp_R = interp_R.view(current_Nz_in_slice, Nx, Ny, T).permute(3,0,1,2)
+            # interp shape: (current_Nz*Nx*Ny, T)
+            # Reshape to (T, current_Nz, Nx, Ny) for F.unfold
+            interp_L = interp_L.view(current_Nz_in_slice, Nx, Ny, T).permute(3, 0, 1, 2)
+            interp_R = interp_R.view(current_Nz_in_slice, Nx, Ny, T).permute(3, 0, 1, 2)
 
-            L_unfold = F.unfold(interp_L.permute(1,0,2,3).reshape(current_Nz_in_slice, T, Nx, Ny), kernel_size=(Kx, Ky), stride=(stride, stride))
-            R_unfold = F.unfold(interp_R.permute(1,0,2,3).reshape(current_Nz_in_slice, T, Nx, Ny), kernel_size=(Kx, Ky), stride=(stride, stride))
+            # F.unfold expects (batch, channels, H, W) → batch=current_Nz, C=T, H=Nx, W=Ny
+            L_unfold = F.unfold(interp_L.permute(1, 0, 2, 3).reshape(current_Nz_in_slice, T, Nx, Ny),
+                                kernel_size=(Kx, Ky), stride=(stride, stride))
+            R_unfold = F.unfold(interp_R.permute(1, 0, 2, 3).reshape(current_Nz_in_slice, T, Nx, Ny),
+                                kernel_size=(Kx, Ky), stride=(stride, stride))
 
+            # L_unfold: (current_Nz, T*Kx*Ky, Nc)  →  patches: (Nc, T*Kx*Ky, current_Nz)
             L_patches = L_unfold.permute(2, 1, 0).reshape(Nc_for_xy_plane, -1, current_Nz_in_slice)
             R_patches = R_unfold.permute(2, 1, 0).reshape(Nc_for_xy_plane, -1, current_Nz_in_slice)
 
             del interp_L, interp_R, L_unfold, R_unfold
             torch.cuda.empty_cache()
 
-
+            # Update running best in-place — no accumulator tensor needed.
             for z_local_idx in range(current_Nz_in_slice):
                 if method == 'fringe':
-                    corr_slice = self.phase_map_difference(L_patches[:,:,z_local_idx], R_patches[:,:,z_local_idx])
+                    corr_slice = self.phase_map_difference(L_patches[:, :, z_local_idx],
+                                                           R_patches[:, :, z_local_idx])
+                    corr_clean = torch.nan_to_num(corr_slice, nan=float('inf'))
+                    update_mask = corr_clean < best_score
                 else:
-                    corr_slice = self.zncc_correlation(L_patches[:,:,z_local_idx], R_patches[:,:,z_local_idx])
+                    corr_slice = self.zncc_correlation(L_patches[:, :, z_local_idx],
+                                                       R_patches[:, :, z_local_idx])
+                    corr_clean = torch.nan_to_num(corr_slice, nan=float('-inf'))
+                    update_mask = corr_clean > best_score
 
-                corr_map_overall_z[:, z0_idx + z_local_idx] = corr_slice
+                best_score[update_mask] = corr_clean[update_mask]
+                best_z_idx[update_mask] = z0_idx + z_local_idx
 
-        if method == 'fringe':
-            corr_overall, z_best_indices_overall = torch.min(torch.nan_to_num(corr_map_overall_z, nan=1), dim=1)
-            z_best_values_overall = self.z_vals[z_best_indices_overall]
-        else:
-            corr_overall, z_best_indices_overall = torch.max(torch.nan_to_num(corr_map_overall_z, nan=0), dim=1)
-            z_best_values_overall = self.z_vals[z_best_indices_overall]
-        
+            del L_patches, R_patches
+            torch.cuda.empty_cache()
 
+        z_best_values_overall = self.z_vals[best_z_idx]
         x_coords_final = self.x_vals[IX_centers]
         y_coords_final = self.y_vals[IY_centers]
-        
-        xyz_final = torch.stack([x_coords_final, y_coords_final, z_best_values_overall], dim=1).to(torch.float32)
 
-        # Project final points to both image planes and check bounds
+        xyz_final = torch.stack([x_coords_final, y_coords_final, z_best_values_overall],
+                                dim=1).to(torch.float32)
 
-        return xyz_final, corr_overall, z_best_indices_overall
+        return xyz_final, best_score, best_z_idx
+
 
     def get_cropped_image_bounds(self, image_shape, crop_factor: float):
         """
@@ -386,3 +424,19 @@ class PyTorchStereoCorrel(nn.Module):
         dense_mask = neighbor_counts >= min_neighbors
 
         return xyz_gpu[dense_mask], corr_gpu[dense_mask]
+
+    def plot_3d_points(self, x, y, z, color=None, title='Plot 3D'):
+        def to_numpy(tensor):
+            if isinstance(tensor, torch.Tensor):
+                return tensor.cpu().numpy()
+            return tensor
+        
+        fig = plt.figure(figsize=(10, 8))
+        ax = fig.add_subplot(111, projection='3d')
+        ax.title.set_text(title)
+
+        scatter = ax.scatter(to_numpy(x), to_numpy(y), to_numpy(z), c=to_numpy(color), cmap='viridis', marker='o')
+        plt.colorbar(scatter, ax=ax, shrink=0.5, aspect=5)
+        ax.set_xlabel('X [mm]'); ax.set_ylabel('Y [mm]'); ax.set_zlabel('Z [mm]')
+        ax.set_aspect('equal', adjustable='box')
+        plt.show()
