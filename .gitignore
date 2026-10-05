@@ -16,3 +16,9 @@
 **/*.txt
 **/*.npy
 **/*.mat
+__pycache__
+.gui_*_config.json
+.gui_*_runner_temp.py
+.gui_zscan_config.json
+.gui_debug_config.json
+.gui_unified_config.json

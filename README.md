@@ -47,13 +47,21 @@ O **Stereo Z-Scan** é um projeto para reconstrução 3D de alta resolução uti
 1. Ajuste os arquivos de configuração em ```cfg/``` conforme seu sistema de câmeras e parâmetros de calibração.
 2. Execute o script principal para processar as imagens e gerar a reconstrução 3D:
 ```bash
-  python main_spatial.py
+  python zscan.py --help
 ```
 3. Os resultados (nuvens de pontos, mapas de profundidade, etc.) serão salvos na pasta de saída definida no script.
 
 ## Organização do Projeto
 
-* main_spatial.py: Pipeline principal para reconstrução 3D.
-* include/SpatialCorrelation.py: Algoritmos de correlação espacial e temporal.
+* zscan.py: CLI atual para reconstrução 3D (laser, franjas e correlação).
+* gui_zscan_unified.py: Interface de execução e diagnóstico.
+* main_spatial.py: Pipeline CuPy original, mantido como baseline opcional.
+* include/SpatioCorrelation.py: Motor de reconstrução PyTorch atual.
+* include/laser_surface.py: Suporte e refinamento de superfícies laser.
+* include/SpatialCorrelation.py: Motor CuPy original.
 * extras/: Scripts auxiliares para visualização, depuração e pré-processamento.
 * cfg/: Arquivos de configuração de calibração e parâmetros do sistema.
+
+## Limpeza do workspace
+
+Consulte [WORKSPACE_CLEANUP.md](WORKSPACE_CLEANUP.md) para a classificação dos arquivos necessários, ferramentas opcionais, experimentos arquivados e instruções de recuperação. O pipeline atual também requer PyTorch; `requirements.txt` ainda descreve o ambiente CuPy original.
