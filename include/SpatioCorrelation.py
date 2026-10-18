@@ -23,6 +23,11 @@ class PyTorchStereoCorrel(nn.Module):
 
         # Single source of truth for near-zero guard — used by ZNCC and depth check
         self.epsilon = 1e-8
+        # Pixels a projected centre must keep from the image border so that its
+        # whole correlation patch (plus interpolation support) is inside the
+        # image. grid_sample pads with replicated edge pixels, which correlate
+        # spuriously between the two views when both patches hang over the edge.
+        self.image_margin = 0
         self.fringe_min_modulation = 10.0
         self.fringe_max_phase_jump = np.pi
         self.camera_params = self.read_yaml_file(yaml_file)
@@ -107,6 +112,14 @@ class PyTorchStereoCorrel(nn.Module):
 
         self.left_images = to_device(processed_left_imgs)
         self.right_images = to_device(processed_right_imgs)
+        # Background temporal-noise level of the (equalised) frames: the 20th
+        # percentile of the per-pixel std over time is dominated by unlit
+        # pixels. Used to make the texture mask exposure-independent.
+        if self.left_images.shape[0] > 1:
+            sub = self.left_images[:, ::4, ::4].std(0).flatten()
+            self.noise_level = float(torch.quantile(sub, 0.2))
+        else:
+            self.noise_level = 0.0
 
     def remove_img_distortion(self, img, cam_name):
         """Remove a distorção de uma imagem usando os parâmetros da câmera."""
@@ -166,10 +179,11 @@ class PyTorchStereoCorrel(nn.Module):
 
         if image_shape is not None:
             H, W = image_shape
-            # Mask for points inside image boundaries
+            m = float(getattr(self, 'image_margin', 0))
+            # Mask for points inside image boundaries (minus the patch margin)
             inside_mask = (
-                (uv_points[:, 0] >= 0) & (uv_points[:, 0] < W) &
-                (uv_points[:, 1] >= 0) & (uv_points[:, 1] < H)
+                (uv_points[:, 0] >= m) & (uv_points[:, 0] < W - m) &
+                (uv_points[:, 1] >= m) & (uv_points[:, 1] < H - m)
             )
             return uv_points, inside_mask
         else:
@@ -425,6 +439,103 @@ class PyTorchStereoCorrel(nn.Module):
                 [torch.where(v, s, float('-inf')) for s, v in zip(split_scores, split_valid)], 1)
 
         return xyz_final, best_score, best_z_idx
+
+    def process_guided_z(self, Kx, Ky, seed_map, half_window, z_step, stride=1, Nz_block_voxels=10,
+                         method='correl', node_mask=None, exclusion=2.0):
+        """Depth scan restricted to a per-node window around a seed surface.
+
+        Instead of sweeping every lattice node through the same global list of
+        depths, node ``(ix, iy)`` is evaluated at ``seed_map[ix, iy] + k*z_step``
+        for ``k`` in ``[-n, n]`` with ``n = round(half_window / z_step)``. The
+        correlation patch of a centre therefore uses its lattice neighbours at
+        *their own* seed depth, i.e. the patch follows the seed surface instead
+        of a fronto-parallel plane, which improves the correlation on tilted or
+        curved surfaces. Nodes whose seed is NaN (or excluded by ``node_mask``)
+        are not evaluated.
+
+        Parameters
+        ----------
+        seed_map : (Nx, Ny) tensor aligned with ``self.x_vals`` / ``self.y_vals``.
+        half_window : half width of the depth window in mm.
+        z_step : depth sampling in mm.
+        node_mask : optional (Nx, Ny) bool tensor selecting which centres to report.
+
+        Returns
+        -------
+        xyz (Nc, 3), score (Nc,), offset index (Nc,), runner-up score (Nc,) for
+        the reported centres. The runner-up is the best score found at least
+        ``exclusion`` mm away from the winner (from per-block maxima), so that
+        ``score - runner_up`` measures how distinct the chosen peak is: a true
+        correspondence stands clearly above the rest of the window, a chance
+        match does not.
+        """
+        Nx, Ny = len(self.x_vals), len(self.y_vals)
+        T = self.left_images.shape[0]
+        seed = seed_map.to(self.device, torch.float64)
+        if seed.shape != (Nx, Ny):
+            raise ValueError(f'seed_map shape {tuple(seed.shape)} does not match lattice {(Nx, Ny)}')
+        n_off = max(1, int(round(half_window / z_step)))
+        offsets = torch.arange(-n_off, n_off + 1, device=self.device, dtype=torch.float64) * z_step
+
+        pad_x, pad_y = Kx // 2, Ky // 2
+        ix_centers = torch.arange(pad_x, Nx - pad_x, stride, device=self.device)
+        iy_centers = torch.arange(pad_y, Ny - pad_y, stride, device=self.device)
+        if len(ix_centers) == 0 or len(iy_centers) == 0:
+            empty = torch.empty(0, device=self.device)
+            return empty.new_empty((0, 3)), empty, empty.long()
+        IX, IY = torch.meshgrid(ix_centers, iy_centers, indexing='ij')
+        IX, IY = IX.ravel(), IY.ravel()
+        Nc = IX.shape[0]
+
+        X_2d, Y_2d = torch.meshgrid(self.x_vals, self.y_vals, indexing='ij')
+        XY_flat = torch.stack([X_2d.ravel(), Y_2d.ravel()], dim=1)
+        seed_flat = seed.ravel()
+        worst = float('inf') if method == 'fringe' else float('-inf')
+        best_score = torch.full((Nc,), worst, device=self.device, dtype=torch.float32)
+        best_k = torch.zeros(Nc, dtype=torch.long, device=self.device)
+        n_blocks = (len(offsets) + Nz_block_voxels - 1) // Nz_block_voxels
+        block_best = torch.full((Nc, n_blocks), worst, device=self.device, dtype=torch.float32)
+
+        for bi, k0 in enumerate(range(0, len(offsets), Nz_block_voxels)):
+            k1 = min(k0 + Nz_block_voxels, len(offsets))
+            cur = k1 - k0
+            z_col = (seed_flat[None, :] + offsets[k0:k1, None]).reshape(-1, 1)       # (cur*Nx*Ny, 1)
+            xy = XY_flat.unsqueeze(0).expand(cur, -1, -1).reshape(-1, 2)
+            grid_flat = torch.cat([xy, z_col], dim=1)
+            del xy, z_col
+            uv_l, m_l = self.transform_gcs2ccs(grid_flat, 'left', image_shape=self.left_images.shape[1:])
+            uv_r, m_r = self.transform_gcs2ccs(grid_flat, 'right', image_shape=self.right_images.shape[1:])
+            del grid_flat
+            interp_l = self.interpolate_images(self.left_images, uv_l, uv_mask=m_l, method=method)
+            interp_r = self.interpolate_images(self.right_images, uv_r, uv_mask=m_r, method=method)
+            del uv_l, uv_r, m_l, m_r
+            corr_all = self._unfold_and_zncc(interp_l, interp_r, cur, T, Nx, Ny, Kx, Ky, stride, method)
+            del interp_l, interp_r
+            if method == 'fringe':
+                blk_best, blk_idx = corr_all.min(dim=1)
+                update = blk_best < best_score
+            else:
+                blk_best, blk_idx = corr_all.max(dim=1)
+                update = blk_best > best_score
+            block_best[:, bi] = blk_best
+            best_score[update] = blk_best[update]
+            best_k[update] = k0 + blk_idx[update].long()
+            del corr_all
+
+        # Runner-up: best block maximum at least ``exclusion`` mm from the winner.
+        excl_blocks = max(1, int(round(exclusion / (z_step * Nz_block_voxels))))
+        best_block = best_k // Nz_block_voxels
+        far = (torch.arange(n_blocks, device=self.device)[None, :] - best_block[:, None]).abs() > excl_blocks
+        masked = torch.where(far, block_best, torch.full_like(block_best, worst))
+        runner_up = masked.min(dim=1).values if method == 'fringe' else masked.max(dim=1).values
+
+        z_best = seed[IX, IY] + offsets[best_k]
+        xyz = torch.stack([self.x_vals[IX], self.y_vals[IY], z_best], dim=1).to(torch.float32)
+        # Poisoned patches carry +-inf (or the +-FLT_MAX that nan_to_num maps them to).
+        valid = torch.isfinite(z_best) & (best_score.abs() < 1e30)
+        if node_mask is not None:
+            valid &= node_mask.to(self.device)[IX, IY]
+        return xyz[valid], best_score[valid], (best_k - n_off)[valid], runner_up[valid]
 
     # ── Accuracy enhancements ─────────────────────────────────────────────────
 
@@ -789,7 +900,12 @@ class PyTorchStereoCorrel(nn.Module):
             L_masked = L_interp[:, 1]
         else:
             L_std, R_std = L_interp.std(dim=1), R_interp.std(dim=1)
-            std_mask = (bounds < L_std) & (bounds < R_std)
+            # ``bounds`` is an absolute std on equalised intensities, which
+            # depends on exposure: a dark capture fails it everywhere. Use it as
+            # a cap and otherwise require 3x the background noise level.
+            noise = getattr(self, 'noise_level', 0.0)
+            eff = min(float(bounds), max(2.0, 3.0 * noise)) if noise > 0 else float(bounds)
+            std_mask = (eff < L_std) & (eff < R_std)
             L_masked = L_std
 
         combined_mask = std_mask

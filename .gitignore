@@ -3,6 +3,9 @@
 /.idea/
 /venv/
 ''
+**/test_*.py
+**/fix_*.py
+**/docs_*.py
 /csv/
 /.vscode/
 */.DS_Store
@@ -22,3 +25,6 @@ __pycache__
 .gui_zscan_config.json
 .gui_debug_config.json
 .gui_unified_config.json
+/tests/
+**/*.json
+**/*.npz
